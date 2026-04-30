@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(echo \"started pid=$!\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:5173/)",
+      "Bash(ffmpeg -version)",
+      "Bash(pkill -f \"vite\")",
+      "Bash(awk '{print $2}')",
+      "PowerShell(Get-Process | Where-Object { $_.ProcessName -eq 'node' } | Select-Object Id, ProcessName, StartTime | Format-Table -AutoSize)",
+      "PowerShell(Stop-Process -Force)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 5173 -ErrorAction SilentlyContinue)",
+      "Bash(echo \"started pid=$!\" sleep 5 curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:5173/ echo \"---log---\" cat /tmp/vite-supabase2.log)"
+    ]
+  }
+}

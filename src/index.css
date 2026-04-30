@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: #f0f2f5;
+  color: #0a1f44;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* Hide native scrollbars in side panels but keep functionality */
+.vp-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #c0c5cf transparent;
+}
+.vp-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.vp-scroll::-webkit-scrollbar-thumb {
+  background: #c0c5cf;
+  border-radius: 3px;
+}
+.vp-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Range slider styling */
+input[type="range"].vp-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: #e3e6eb;
+  border-radius: 2px;
+  outline: none;
+}
+input[type="range"].vp-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #0066ff;
+  cursor: pointer;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+input[type="range"].vp-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #0066ff;
+  cursor: pointer;
+  border: 2px solid white;
+}
+
+/* Canvas wrapper border + shadow */
+.vp-canvas-shadow {
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
+}
+
+/* Rolling logo — slow continuous spin so the button looks like it's
+   rotating like a wheel. Tailwind's `animate-spin` is 1 s linear; a
+   sewing button rolling looks better at a calmer 5 s. */
+@keyframes vp-roll {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+.vp-logo-roll {
+  animation: vp-roll 5s linear infinite;
+  transform-origin: 50% 50%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vp-logo-roll {
+    animation: none;
+  }
+}
