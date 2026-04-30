@@ -299,16 +299,25 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   setBackgroundColor: (c) => {
     const canvas = get().canvas;
     set({ backgroundColor: c });
-    // The Bleed rectangle is the visible "card" in the new model — its
-    // fill is what the user sees as the background colour. The outer
-    // workspace stays a fixed light gray (handled by CSS, not fabric).
-    if (canvas) {
-      const bleed = canvas.getObjects().find((o) => (o as any).id === "bleed");
-      if (bleed) {
-        bleed.set("fill", c);
-        canvas.requestRenderAll();
-      }
+    if (!canvas) return;
+    // Always update the bleed rect so the colour is correct underneath
+    // (it's what the user sees in non-template flows and through any
+    // gaps in the template).
+    const bleed = canvas.getObjects().find((o) => (o as any).id === "bleed");
+    if (bleed) bleed.set("fill", c);
+    // Templates ship their own full-bleed background rect, tagged on load
+    // as `id: "templateBg"`. When present, that rect sits ON TOP of the
+    // bleed and is what the user actually sees, so it has to receive the
+    // colour change too.
+    const tplBg = canvas
+      .getObjects()
+      .find((o) => (o as any).id === "templateBg");
+    if (tplBg) {
+      // Templates may use stroke instead of fill (rare but possible).
+      // Always set fill — that's the visible field for a "background" rect.
+      tplBg.set("fill", c);
     }
+    canvas.requestRenderAll();
   },
 
   selected: null,

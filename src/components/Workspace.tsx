@@ -306,7 +306,63 @@ function fitTemplateObjectsToBleed(
     o.top = cy + ((o.top ?? 0) - oldCenterY) * scale;
     o.setCoords();
   });
+  tagTemplateBackground(canvas, lengthMm, widthMm);
   canvas.requestRenderAll();
+}
+
+/**
+ * Identify the template's background rectangle and tag it `id: "templateBg"`.
+ *
+ * Most trims-style templates put a full-bleed coloured rect at the bottom of
+ * the stack as the design's background. Without this tag the Background
+ * panel's colour picker would change the bleed-rect fill underneath, which
+ * the template covers — so the user would see no change. By tagging the
+ * template's own background we can route colour changes to it directly.
+ *
+ * Heuristic: the bottom-most user object that's a fillable shape and whose
+ * post-fit bounding rect covers ≥ 80 % of the bleed area.
+ */
+function tagTemplateBackground(
+  canvas: fabric.Canvas,
+  lengthMm: number,
+  widthMm: number
+) {
+  const bleedArea = lengthMm * MM_TO_PX * widthMm * MM_TO_PX;
+  const userObjs = canvas
+    .getObjects()
+    .filter((o) => !(o as any).excludeFromExport);
+  // First user object in z-order is the bottom of the stack.
+  for (const obj of userObjs) {
+    const t = obj.type ?? "";
+    if (t !== "rect" && t !== "polygon" && t !== "path") continue;
+    const fill = (obj as any).fill;
+    if (!fill || fill === "transparent") continue;
+    const br = obj.getBoundingRect(true, true);
+    const coverage = (br.width * br.height) / bleedArea;
+    if (coverage >= 0.8) {
+      (obj as any).id = "templateBg";
+      // Sync the Background panel's current colour to whatever the
+      // template ships, so the colour picker shows the right swatch the
+      // first time the user opens the panel.
+      if (typeof fill === "string") {
+        const store = useCanvasStore.getState();
+        // Update the store field WITHOUT re-running setBackgroundColor's
+        // canvas mutation — we'd just re-paint the same colour we read.
+        useCanvasStore.setState({ backgroundColor: fill });
+        // Also keep the bleed rect coherent — it's the fallback if the
+        // user later deletes the template's background.
+        const bleed = canvas
+          .getObjects()
+          .find((o) => (o as any).id === "bleed");
+        if (bleed) bleed.set("fill", fill);
+        void store; // silence unused-var if logging is removed
+      }
+      return;
+    }
+    // Only consider the literal bottom object — if it's not a coverage rect,
+    // there's no template background to repurpose.
+    return;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -467,16 +523,24 @@ export function Workspace() {
 
   /* ----- Update guides + rescale user content whenever dims change ----- */
   /*
-   * When the user changes the bleed dimensions in the Product Options panel,
-   * we don't just resize the bleed/safe rectangles — we also scale every
-   * existing user object proportionally around the canvas centre so the
-   * design tracks the new size. Without this, going 120 × 70 → 60 × 35
-   * would leave content at its original pixel size, which gets clipped to
-   * the now-smaller safe area and looks broken.
+   * When the bleed dimensions change in the Product Options panel, every
+   * existing user object is rescaled so its layout tracks the new bleed
+   * exactly — no drift, no compounding loss across many small steps.
    *
-   * The scale factor uses `Math.min(newL/oldL, newW/oldW)` so a uniform
-   * resize (e.g. 50 % on both axes) shrinks content by the same 50 %, while
-   * a one-axis change uses the smaller ratio so nothing overflows.
+   * Why **per-axis** scaling (instead of a single Math.min/Math.max ratio):
+   *
+   *   With aspect lock ON, going 120 → 119 mm of length re-derives width
+   *   to round(119 / 1.714) = 69 mm. The bleed shrinks by 119/120 = 0.9917
+   *   on X and 69/70 = 0.9857 on Y. A single uniform scale of Math.min
+   *   (= 0.9857) leaves the design ~7 px short of the bleed on X. Iterate
+   *   that across 60+ key presses (down then up) and the design ends up
+   *   visibly smaller than the safe area — the bug the user reported.
+   *
+   *   Scaling each object's left/top + scaleX/scaleY by the **per-axis**
+   *   bleed ratio makes the design track the bleed exactly on every step.
+   *   For aspect-locked changes scaleX === scaleY (no distortion). For
+   *   unlocked changes the design stretches with the bleed, which is the
+   *   correct behaviour: the user explicitly changed the aspect ratio.
    *
    * History snapshots are paused around the rescale because the operation
    * mutates many objects at once and we don't want every micro-change in
@@ -491,18 +555,21 @@ export function Workspace() {
     const dimsChanged = prev.length !== lengthMm || prev.width !== widthMm;
 
     if (dimsChanged && prev.length > 0 && prev.width > 0) {
-      const scale = Math.min(lengthMm / prev.length, widthMm / prev.width);
-      if (scale > 0 && scale !== 1) {
+      const scaleX = lengthMm / prev.length;
+      const scaleY = widthMm / prev.width;
+      const shouldRescale =
+        scaleX > 0 && scaleY > 0 && (scaleX !== 1 || scaleY !== 1);
+      if (shouldRescale) {
         const cx = VIRTUAL_SIZE / 2;
         const cy = VIRTUAL_SIZE / 2;
         const hist = historyRef.current;
         hist?.pause();
         canvas.getObjects().forEach((o) => {
           if ((o as any).excludeFromExport) return;
-          o.scaleX = (o.scaleX ?? 1) * scale;
-          o.scaleY = (o.scaleY ?? 1) * scale;
-          o.left = cx + ((o.left ?? 0) - cx) * scale;
-          o.top = cy + ((o.top ?? 0) - cy) * scale;
+          o.scaleX = (o.scaleX ?? 1) * scaleX;
+          o.scaleY = (o.scaleY ?? 1) * scaleY;
+          o.left = cx + ((o.left ?? 0) - cx) * scaleX;
+          o.top = cy + ((o.top ?? 0) - cy) * scaleY;
           o.setCoords();
         });
         hist?.resume(false);
