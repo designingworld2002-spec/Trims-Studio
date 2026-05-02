@@ -46,12 +46,21 @@ export async function saveDesign(
 ): Promise<SaveDesignResult> {
   const { canvas } = input;
 
-  // 1. Render preview, hiding the dashed bleed/safety guides for the snapshot.
-  const guides = canvas.getObjects().filter((o) => {
-    const id = (o as any).id;
-    return id === "bleed" || id === "safety";
-  });
-  guides.forEach((g) => g.set("opacity", 0));
+  // 1. Render preview. The bleed rect IS the visible card (it carries the
+  // user's background colour), so we keep it during the snapshot. We only
+  // hide the dashed safety guide and temporarily strip the bleed's own
+  // dashed yellow stroke so the export looks like the printed card.
+  const safety = canvas
+    .getObjects()
+    .find((o) => (o as any).id === "safety");
+  const bleed = canvas
+    .getObjects()
+    .find((o) => (o as any).id === "bleed");
+  const prevSafetyOpacity = safety?.opacity ?? 1;
+  const prevBleedStroke = bleed?.stroke;
+  const prevBleedStrokeWidth = bleed?.strokeWidth;
+  if (safety) safety.set("opacity", 0);
+  if (bleed) bleed.set({ stroke: "transparent", strokeWidth: 0 });
   canvas.renderAll();
 
   const trimW = input.lengthMm * MM_TO_PX;
@@ -68,7 +77,12 @@ export async function saveDesign(
     multiplier: PREVIEW_MULTIPLIER,
   });
 
-  guides.forEach((g) => g.set("opacity", 1));
+  if (safety) safety.set("opacity", prevSafetyOpacity);
+  if (bleed)
+    bleed.set({
+      stroke: prevBleedStroke as any,
+      strokeWidth: prevBleedStrokeWidth as any,
+    });
   canvas.renderAll();
 
   const fabricJson = canvas.toJSON([
@@ -77,6 +91,8 @@ export async function saveDesign(
     "evented",
     "excludeFromExport",
     "qrUrl",
+    "qrFgColor",
+    "qrBgColor",
   ]);
 
   // 2/3. Push to Supabase if configured, otherwise stash locally so dev

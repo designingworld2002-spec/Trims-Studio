@@ -35,7 +35,16 @@ installFabricTextareaFix();
     imageUrl: cfg.templateImageUrl,
     jsonUrl: cfg.templateJsonUrl,
   });
-  if (cfg.autoOpenUpload) s.setActiveTool("uploads");
+  if (cfg.autoOpenUpload) {
+    // Centered modal (Vistaprint-style) instead of just opening the
+    // sidebar — gives the user a clearer first-touch experience.
+    s.setUploadModalOpen(true);
+    s.setActiveTool("uploads");
+  }
+
+  // Snapshot the boot URL so the "Revert to original template" pill can
+  // restore it after a Recent Designs load.
+  s.setOriginalUrlSearch(window.location.search);
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

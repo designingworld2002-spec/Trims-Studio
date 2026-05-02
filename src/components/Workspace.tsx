@@ -3,8 +3,10 @@ import { fabric } from "fabric";
 import { useCanvasStore } from "@/store/canvasStore";
 import { HistoryManager } from "@/lib/history";
 import { Autosave, loadSavedDesign, syncWorkIdToUrl } from "@/lib/autosave";
+import { useSmartGuides } from "@/lib/useSmartGuides";
 import { TopContextualToolbar } from "./TopContextualToolbar";
 import { ObjectActionMenu } from "./ObjectActionMenu";
+import { RevertToTemplate } from "./RevertToTemplate";
 
 /**
  * Virtual workspace constants.
@@ -65,14 +67,22 @@ function drawGuides(
   widthMm: number,
   bgFill: string
 ): GuideRects {
+  // Pause history while we mutate guides. Without this we hit a recursive
+  // duplication bug:
+  //   drawGuides cleanup → object:removed event → history snapshot →
+  //   onChange sees no guides → calls drawGuides again → both drawGuides
+  //   calls add a pair → 4 guides on canvas.
+  // Pausing means the cleanup events don't trigger the recursive callback.
+  const hist = _historyManager;
+  const wasPaused = hist?.isPaused() ?? false;
+  if (hist && !wasPaused) hist.pause();
+
   // Wipe existing guides (HMR, undo restores, dim changes).
-  canvas
-    .getObjects()
-    .filter((o) => {
-      const id = (o as any).id;
-      return id === GUIDE_IDS.bleed || id === GUIDE_IDS.safety;
-    })
-    .forEach((o) => canvas.remove(o));
+  const stale = canvas.getObjects().filter((o) => {
+    const id = (o as any).id;
+    return id === GUIDE_IDS.bleed || id === GUIDE_IDS.safety;
+  });
+  if (stale.length > 0) canvas.remove(...stale);
 
   // X axis = length, Y axis = width. Bleed dimensions come straight from
   // the store — they are the master size.
@@ -141,6 +151,10 @@ function drawGuides(
   canvas.sendToBack(safety);
   canvas.sendToBack(bleed);
   canvas.requestRenderAll();
+
+  // Restore history if WE paused it (don't unpause if our caller had it
+  // already paused for its own bulk operation, e.g. loadFromJSON).
+  if (hist && !wasPaused) hist.resume(false);
 
   return {
     bleed,
@@ -386,6 +400,11 @@ export function Workspace() {
   const zoom = useCanvasStore((s) => s.zoom);
   const setHistoryFlags = useCanvasStore((s) => s.setHistoryFlags);
 
+  // Smart alignment guides (snap-to-edge / snap-to-centre while dragging).
+  // Reads `canvas` from the store so it activates as soon as the canvas
+  // is mounted and tears down on unmount.
+  useSmartGuides(useCanvasStore((s) => s.canvas));
+
   const [fitScale, setFitScale] = useState(1);
 
   // Position of floating action menu in CSS pixels relative to the stage.
@@ -510,8 +529,65 @@ export function Workspace() {
     });
     autosaveRef.current = auto;
 
+    // designOps facade — load arbitrary fabric JSON onto the live canvas
+    // (Recent Designs picker) or wipe every user object (Clear canvas).
+    _registerDesignOps({
+      loadJson: (json, lengthMm, widthMm) =>
+        new Promise<void>((resolve) => {
+          hist.pause();
+          canvas.loadFromJSON(json, () => {
+            if (
+              canvas.width !== VIRTUAL_SIZE ||
+              canvas.height !== VIRTUAL_SIZE
+            ) {
+              canvas.setDimensions({
+                width: VIRTUAL_SIZE,
+                height: VIRTUAL_SIZE,
+              });
+            }
+            canvas.backgroundColor = "transparent";
+            canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+            // Honor the saved design's bleed dimensions; the dim-change
+            // effect upstairs will redraw the guides + reapply the safe
+            // clipPath in the next render. We deliberately DON'T draw
+            // guides here ourselves — doing both leaves duplicate guide
+            // rectangles on the canvas.
+            const store = useCanvasStore.getState();
+            if (
+              store.canvasLengthMm === lengthMm &&
+              store.canvasWidthMm === widthMm
+            ) {
+              // Dims didn't change, the dim-effect won't fire — manually
+              // redraw guides + reapply clips.
+              guidesRef.current = drawGuides(
+                canvas,
+                lengthMm,
+                widthMm,
+                store.backgroundColor
+              );
+              applySafeAreaClipToAllObjects(canvas, guidesRef.current);
+            } else {
+              store.setCanvasSize(lengthMm, widthMm);
+            }
+            hist.resume(true);
+            resolve();
+          });
+        }),
+      clearAll: () => {
+        hist.pause();
+        canvas
+          .getObjects()
+          .filter((o) => !(o as any).excludeFromExport)
+          .forEach((o) => canvas.remove(o));
+        canvas.discardActiveObject();
+        canvas.requestRenderAll();
+        hist.resume(true);
+      },
+    });
+
     return () => {
       _registerHistory(null);
+      _registerDesignOps(null);
       hist.dispose();
       auto.flush();
       auto.dispose();
@@ -729,6 +805,11 @@ export function Workspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fitScale, zoom]);
 
+  // (No scroll-centering effect needed — we're back to a static
+  // overflow-hidden workspace with center-anchored CSS scaling, so
+  // zooming naturally radiates from the canvas center without any
+  // browser scrollbar shifting things around.)
+
   /* ----- Fit-to-90% via ResizeObserver on the container ----- */
   useEffect(() => {
     const el = containerRef.current;
@@ -750,41 +831,50 @@ export function Workspace() {
   const stagePxSize = VIRTUAL_SIZE * totalScale;
 
   return (
+    /*
+     * Static, premium-feel workspace.
+     *
+     * `overflow-hidden` (no browser scrollbars) plus flex centering keeps
+     * the stage anchored to the middle of the work area at every zoom.
+     * The canvas itself is rendered at the virtual resolution and scaled
+     * with `transform-origin: center center`, so zooming radiates
+     * outward without ever shifting top-left or right-bottom.
+     */
     <div
       ref={containerRef}
       className="relative w-full h-full flex items-center justify-center overflow-hidden"
     >
-      {/* Stage: a fixed-size box that we transform. */}
       <div
         ref={stageRef}
-        className="relative"
+        className="relative shrink-0"
         style={{
           width: stagePxSize,
           height: stagePxSize,
         }}
       >
-        {/* Canvas itself, sized at virtual resolution and visually scaled. */}
+        {/* Canvas itself: virtual resolution, scaled from CENTER. */}
         <div
-          className="absolute top-0 left-0 origin-top-left vp-canvas-shadow"
+          className="absolute vp-canvas-shadow"
           style={{
             width: VIRTUAL_SIZE,
             height: VIRTUAL_SIZE,
-            transform: `scale(${totalScale})`,
-            transformOrigin: "top left",
+            top: "50%",
+            left: "50%",
+            transform: `translate(-50%, -50%) scale(${totalScale})`,
+            transformOrigin: "center center",
           }}
         >
           <canvas ref={canvasElRef} />
         </div>
 
-        {/* External labels for Trim Size and Bleed Size — positioned
-            relative to the scaled stage in CSS pixels. */}
+        {/* External labels for Bleed + Safe dimensions. */}
         <CanvasLabels
           lengthMm={lengthMm}
           widthMm={widthMm}
           stagePx={stagePxSize}
         />
 
-        {/* Floating per-object actions */}
+        {/* Floating per-object actions. */}
         {actionMenuPos.visible && (
           <ObjectActionMenu left={actionMenuPos.left} top={actionMenuPos.top} />
         )}
@@ -792,6 +882,10 @@ export function Workspace() {
 
       {/* Centered top contextual toolbar (anchored to viewport). */}
       <TopContextualToolbar />
+
+      {/* Pill that appears only when a design has been loaded from the
+          Recent Designs picker. */}
+      <RevertToTemplate />
     </div>
   );
 }
@@ -877,4 +971,30 @@ export function _registerHistory(h: HistoryManager | null) {
 export const history = {
   undo: () => _historyManager?.undo(),
   redo: () => _historyManager?.redo(),
+};
+
+/* ------------------------------------------------------------------ */
+/* designOps — load saved fabric JSON / clear all user content        */
+/*                                                                     */
+/* Used by the Recent Designs picker and the Settings gear's          */
+/* "Clear canvas" action. Implementation lives inside Workspace's     */
+/* effect (so it has the canvas + drawGuides + clipPath helpers in    */
+/* scope); we just expose a stable module-level facade.               */
+/* ------------------------------------------------------------------ */
+
+interface DesignOpsImpl {
+  loadJson: (json: any, lengthMm: number, widthMm: number) => Promise<void>;
+  clearAll: () => void;
+}
+
+let _designOps: DesignOpsImpl | null = null;
+
+export function _registerDesignOps(impl: DesignOpsImpl | null) {
+  _designOps = impl;
+}
+
+export const designOps = {
+  loadJson: (json: any, lengthMm: number, widthMm: number) =>
+    _designOps?.loadJson(json, lengthMm, widthMm),
+  clearAll: () => _designOps?.clearAll(),
 };

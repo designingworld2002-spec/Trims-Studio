@@ -32,7 +32,15 @@ export class HistoryManager {
     let json: string;
     try {
       json = JSON.stringify(
-        this.canvas.toJSON(["id", "selectable", "evented", "excludeFromExport"])
+        this.canvas.toJSON([
+          "id",
+          "selectable",
+          "evented",
+          "excludeFromExport",
+          "qrUrl",
+          "qrFgColor",
+          "qrBgColor",
+        ])
       );
     } catch (e) {
       // Defensive: malformed objects (e.g. IText with `styles: undefined`
@@ -61,10 +69,25 @@ export class HistoryManager {
     if (takeSnapshot) this.snapshot();
   }
 
+  isPaused() {
+    return this.paused;
+  }
+
+  /**
+   * Wrap the snapshot trigger so any object flagged `excludeFromExport`
+   * (guides, smart-alignment lines) doesn't pollute the undo stack with
+   * no-op snapshots — fabric still fires the event for them, but their
+   * additions/removals shouldn't be undoable.
+   */
+  private maybeSnapshot = (e: { target?: fabric.Object }) => {
+    if (e.target && (e.target as any).excludeFromExport) return;
+    this.snapshot();
+  };
+
   private attach() {
-    this.canvas.on("object:added", this.snapshot);
-    this.canvas.on("object:modified", this.snapshot);
-    this.canvas.on("object:removed", this.snapshot);
+    this.canvas.on("object:added", this.maybeSnapshot);
+    this.canvas.on("object:modified", this.maybeSnapshot);
+    this.canvas.on("object:removed", this.maybeSnapshot);
     // Initial blank state:
     this.snapshot();
   }
@@ -102,8 +125,8 @@ export class HistoryManager {
   }
 
   dispose() {
-    this.canvas.off("object:added", this.snapshot as any);
-    this.canvas.off("object:modified", this.snapshot as any);
-    this.canvas.off("object:removed", this.snapshot as any);
+    this.canvas.off("object:added", this.maybeSnapshot as any);
+    this.canvas.off("object:modified", this.maybeSnapshot as any);
+    this.canvas.off("object:removed", this.maybeSnapshot as any);
   }
 }

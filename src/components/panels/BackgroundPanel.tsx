@@ -30,6 +30,13 @@ const SWATCHES = [
 export function BackgroundPanel() {
   const bg = useCanvasStore((s) => s.backgroundColor);
   const setBg = useCanvasStore((s) => s.setBackgroundColor);
+  const recents = useCanvasStore((s) => s.recentColors);
+  const addRecent = useCanvasStore((s) => s.addRecentColor);
+
+  const apply = (c: string) => {
+    setBg(c);
+    addRecent(c);
+  };
 
   return (
     <div className="space-y-5">
@@ -42,6 +49,7 @@ export function BackgroundPanel() {
             const v = e.target.value;
             if (/^#[0-9a-fA-F]{0,6}$/.test(v)) setBg(v);
           }}
+          onBlur={() => addRecent(bg)}
           className="w-full h-9 px-3 rounded-md border border-vp-border text-sm font-mono focus:outline-none focus:border-vp-blue"
         />
       </div>
@@ -50,11 +58,34 @@ export function BackgroundPanel() {
         <label className="block text-xs font-medium mb-2">Color picker</label>
         <input
           type="color"
-          value={bg}
+          value={bg.startsWith("#") ? bg : "#ffffff"}
           onChange={(e) => setBg(e.target.value)}
+          onBlur={() => addRecent(bg)}
           className="w-full h-10 rounded-md border border-vp-border cursor-pointer"
         />
       </div>
+
+      {recents.length > 0 && (
+        <div>
+          <label className="block text-xs font-medium mb-2">Recent colors</label>
+          <div className="grid grid-cols-8 gap-1.5">
+            {recents.map((c) => (
+              <button
+                key={c}
+                title={c.toUpperCase()}
+                onClick={() => setBg(c)}
+                className={[
+                  "aspect-square rounded border-2 transition",
+                  bg.toLowerCase() === c.toLowerCase()
+                    ? "border-vp-blue scale-110"
+                    : "border-vp-border hover:border-vp-blue",
+                ].join(" ")}
+                style={{ background: c }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div>
         <label className="block text-xs font-medium mb-2">Swatches</label>
@@ -64,7 +95,7 @@ export function BackgroundPanel() {
               key={color}
               title={name}
               aria-label={name}
-              onClick={() => setBg(color)}
+              onClick={() => apply(color)}
               className={[
                 "aspect-square rounded border-2 transition",
                 bg.toLowerCase() === color.toLowerCase()

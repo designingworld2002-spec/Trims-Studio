@@ -2,6 +2,7 @@ import { useState } from "react";
 import { LayoutGrid, QrCode, Table2, SquarePen } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { QrCodeModal } from "../QrCodeModal";
+import { TableModal } from "../TableModal";
 
 interface Option {
   key: string;
@@ -16,6 +17,7 @@ export function MorePanel() {
   const productSlug = useCanvasStore((s) => s.productSlug);
   const setActiveTool = useCanvasStore((s) => s.setActiveTool);
   const [qrOpen, setQrOpen] = useState(false);
+  const [tableOpen, setTableOpen] = useState(false);
 
   // Woven labels are typically too small (≤25 mm short edge) to carry a
   // scannable QR — disable the tool for that product specifically.
@@ -48,9 +50,7 @@ export function MorePanel() {
       key: "tables",
       label: "Tables",
       icon: Table2,
-      onClick: () => {},
-      disabled: true,
-      disabledReason: "Coming soon",
+      onClick: () => setTableOpen(true),
     },
   ];
 
@@ -84,6 +84,7 @@ export function MorePanel() {
         })}
       </div>
       <QrCodeModal open={qrOpen} onClose={() => setQrOpen(false)} />
+      <TableModal open={tableOpen} onClose={() => setTableOpen(false)} />
     </>
   );
 }

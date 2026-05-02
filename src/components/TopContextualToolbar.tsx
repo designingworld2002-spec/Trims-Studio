@@ -1,34 +1,31 @@
-import { useState, useRef, useEffect } from "react";
 import {
   AlignCenter,
   AlignJustify,
   AlignLeft,
   AlignRight,
   Bold,
-  ChevronDown,
+  CaseSensitive,
   Italic,
+  List,
   Sliders,
   Sparkles,
   Underline,
 } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
-
-const FONTS = [
-  "Arimo",
-  "Inter",
-  "Roboto",
-  "Helvetica",
-  "Georgia",
-  "Times New Roman",
-  "Courier New",
-  "Comic Sans MS",
-];
+import { SmartPopover } from "./SmartPopover";
+import { FontCombobox } from "./FontCombobox";
 
 /**
  * Top contextual toolbar — anchored to the top of the canvas viewport.
  *
- * Renders nothing when no object is selected. For text we render the rich
- * text controls; for shapes/images a slimmer fill+opacity bar.
+ * Renders nothing when no object is selected. Two variants:
+ *   - text controls (font / size / color / bold / italic / align / effects / advanced)
+ *   - object controls (color / stroke width / effects / advanced)
+ *
+ * Mobile: the bar can be wider than the viewport, so we cap its width at
+ * `calc(100vw - 24px)` and let it scroll horizontally instead of clipping.
+ * All popovers are portal-rendered (`SmartPopover`) so they're never
+ * clipped by parent overflow.
  */
 export function TopContextualToolbar() {
   const selected = useCanvasStore((s) => s.selected);
@@ -40,10 +37,12 @@ export function TopContextualToolbar() {
     <div
       role="toolbar"
       aria-label="Element toolbar"
-      className="absolute top-3 left-1/2 -translate-x-1/2 bg-white rounded-md shadow-vp-pop border border-vp-border h-11 flex items-center gap-1 px-2 z-20"
+      className="absolute top-3 left-1/2 -translate-x-1/2 bg-white rounded-md shadow-vp-pop border border-vp-border h-11 flex items-center gap-1 px-2 z-20 max-w-[calc(100vw-24px)] overflow-x-auto vp-scroll"
     >
       {selected.type === "text" ? (
         <TextControls selected={selected} patch={patch} />
+      ) : selected.type === "qr" ? (
+        <QrControls selected={selected} />
       ) : (
         <ObjectControls selected={selected} patch={patch} />
       )}
@@ -52,27 +51,70 @@ export function TopContextualToolbar() {
 }
 
 /* ------------------------------------------------------------------ */
+/* QR-specific controls                                                */
+/* ------------------------------------------------------------------ */
+
+function QrControls({ selected }: { selected: Selected }) {
+  const updateQrColors = useCanvasStore((s) => s.updateQrColors);
+  const addRecent = useCanvasStore((s) => s.addRecentColor);
+  const setBg = (c: string) => {
+    addRecent(c === "transparent" ? "" : c);
+    void updateQrColors(undefined, c);
+  };
+  const setFg = (c: string) => {
+    addRecent(c);
+    void updateQrColors(c, undefined);
+  };
+  const isTransparent = selected.qrBgColor === "transparent";
+  return (
+    <>
+      <span className="text-[11px] text-vp-muted px-1 shrink-0">QR</span>
+      <ColorButton value={selected.qrFgColor || "#000000"} onChange={setFg} />
+      <Divider />
+      <span className="text-[11px] text-vp-muted px-1 shrink-0">Bg</span>
+      <ColorButton
+        value={isTransparent ? "#ffffff" : selected.qrBgColor || "#ffffff"}
+        onChange={setBg}
+      />
+      <button
+        onClick={() => setBg("transparent")}
+        className={[
+          "h-7 px-2 rounded text-[11px] font-medium border shrink-0",
+          isTransparent
+            ? "border-vp-blue text-vp-blue bg-vp-blue-light"
+            : "border-vp-border text-vp-ink hover:border-vp-blue",
+        ].join(" ")}
+        title="Transparent background"
+      >
+        No bg
+      </button>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+type Selected = NonNullable<
+  ReturnType<typeof useCanvasStore.getState>["selected"]
+>;
+type Patch = ReturnType<typeof useCanvasStore.getState>["patchActive"];
 
 function TextControls({
   selected,
   patch,
 }: {
-  selected: NonNullable<ReturnType<typeof useCanvasStore.getState>["selected"]>;
-  patch: ReturnType<typeof useCanvasStore.getState>["patchActive"];
+  selected: Selected;
+  patch: Patch;
 }) {
   return (
     <>
-      {/* Font family */}
-      <Dropdown
-        label={selected.fontFamily}
-        width="w-44"
-        items={FONTS.map((f) => ({ label: f, value: f }))}
-        onSelect={(v) => patch({ fontFamily: v })}
+      <FontCombobox
+        value={selected.fontFamily}
+        onChange={(family) => patch({ fontFamily: family })}
       />
 
       <Divider />
 
-      {/* Font size */}
       <input
         type="number"
         min={8}
@@ -82,12 +124,11 @@ function TextControls({
           const n = Number(e.target.value);
           if (Number.isFinite(n) && n > 0) patch({ fontSize: n });
         }}
-        className="w-14 h-7 px-2 text-sm rounded border border-vp-border focus:outline-none focus:border-vp-blue"
+        className="w-14 h-7 px-2 text-sm rounded border border-vp-border focus:outline-none focus:border-vp-blue shrink-0"
       />
 
       <Divider />
 
-      {/* Color */}
       <ColorButton
         value={selected.fill || "#000000"}
         onChange={(c) => patch({ fill: c })}
@@ -95,7 +136,6 @@ function TextControls({
 
       <Divider />
 
-      {/* Bold */}
       <IconToggle
         active={selected.fontWeight === "bold"}
         onClick={() =>
@@ -106,8 +146,6 @@ function TextControls({
         icon={Bold}
         label="Bold"
       />
-
-      {/* Italic */}
       <IconToggle
         active={selected.fontStyle === "italic"}
         onClick={() =>
@@ -118,29 +156,34 @@ function TextControls({
         icon={Italic}
         label="Italic"
       />
-
-      {/* Underline (display-only — fabric supports via .underline; we'd extend the store) */}
       <IconToggle
-        active={false}
-        onClick={() => {}}
+        active={!!selected.underline}
+        onClick={() => patch({ underline: !selected.underline })}
         icon={Underline}
         label="Underline"
       />
 
       <Divider />
 
-      {/* Alignment */}
-      <Popover
+      <CasePopover selected={selected} patch={patch} />
+      <BulletListButton selected={selected} patch={patch} />
+
+      <Divider />
+
+      <SmartPopover
+        align="auto"
+        side="auto"
+        className="p-1"
         trigger={
           <button
             aria-label="Alignment"
-            className="w-8 h-8 rounded hover:bg-vp-rail flex items-center justify-center"
+            className="w-8 h-8 rounded hover:bg-vp-rail flex items-center justify-center shrink-0"
           >
             <AlignmentIcon align={selected.textAlign} />
           </button>
         }
       >
-        <div className="flex gap-1 p-1">
+        <div className="flex gap-1">
           {(["left", "center", "right", "justify"] as const).map((a) => (
             <button
               key={a}
@@ -157,45 +200,224 @@ function TextControls({
             </button>
           ))}
         </div>
-      </Popover>
+      </SmartPopover>
 
       <Divider />
 
-      {/* Effects popover (Shadow / Highlight / Glitch / Echo / Curve) */}
-      <EffectsPopover selected={selected} patch={patch} />
+      <EffectsPopover />
 
       <Divider />
 
-      {/* Advanced popover (opacity, rotation, line height, char spacing) */}
-      <Popover
-        trigger={
+      <AdvancedPopover selected={selected} patch={patch} variant="text" />
+    </>
+  );
+}
+
+function ObjectControls({
+  selected,
+  patch,
+}: {
+  selected: Selected;
+  patch: Patch;
+}) {
+  return (
+    <>
+      <ColorButton
+        value={selected.fill || "#000000"}
+        onChange={(c) => patch({ fill: c })}
+      />
+      <Divider />
+      <StrokeWidthControl selected={selected} patch={patch} />
+      <Divider />
+      <EffectsPopover />
+      <Divider />
+      <AdvancedPopover selected={selected} patch={patch} variant="object" />
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Stroke width — visible for any non-text/non-image object             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Border / line thickness control. Surfaced for every shape variant —
+ * solid rects gain an outline when this goes above 0; hollow shapes /
+ * lines simply get thicker. The slider doubles as a number input so
+ * power users can hit exact print-spec values (e.g. 2 px = 0.2 mm).
+ */
+function StrokeWidthControl({
+  selected,
+  patch,
+}: {
+  selected: Selected;
+  patch: Patch;
+}) {
+  // Hide for text + images; both have their own width semantics in fabric.
+  if (selected.type === "text" || selected.type === "image") return null;
+
+  const value = Number(selected.strokeWidth || 0);
+  return (
+    <SmartPopover
+      align="auto"
+      side="auto"
+      className="w-56 p-3"
+      trigger={
+        <button
+          aria-label="Border thickness"
+          title="Border thickness"
+          className="h-7 px-2 rounded border border-vp-border text-xs flex items-center gap-1.5 hover:border-vp-blue shrink-0"
+        >
+          <span className="text-vp-muted">Border</span>
+          <span className="font-mono">{value}</span>
+        </button>
+      }
+    >
+      <Slider
+        label="Border thickness"
+        min={0}
+        max={40}
+        step={1}
+        value={value}
+        onChange={(v) => patch({ strokeWidth: v })}
+        display={`${Math.round(value)} px`}
+      />
+      <div className="mt-2 flex gap-1.5">
+        {[0, 1, 2, 4, 8].map((preset) => (
           <button
-            aria-label="Advanced"
-            className="w-8 h-8 rounded hover:bg-vp-rail flex items-center justify-center"
+            key={preset}
+            onClick={() => patch({ strokeWidth: preset })}
+            className={[
+              "flex-1 h-7 rounded border text-xs font-medium",
+              value === preset
+                ? "border-vp-blue bg-vp-blue-light text-vp-blue"
+                : "border-vp-border hover:border-vp-blue",
+            ].join(" ")}
           >
-            <Sliders className="w-4 h-4" />
+            {preset}
           </button>
-        }
-      >
-        <div className="w-60 p-3 space-y-3">
-          <Slider
-            label="Opacity"
-            min={0}
-            max={1}
-            step={0.01}
-            value={Number(selected.opacity || 1)}
-            onChange={(v) => patch({ opacity: v })}
-            display={`${Math.round(Number(selected.opacity || 1) * 100)}%`}
-          />
-          <Slider
-            label="Rotation"
-            min={0}
-            max={360}
-            step={1}
-            value={Number(selected.angle || 0)}
-            onChange={(v) => patch({ angle: v })}
-            display={`${Math.round(Number(selected.angle || 0))}°`}
-          />
+        ))}
+      </div>
+    </SmartPopover>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Effects popover                                                     */
+/* ------------------------------------------------------------------ */
+
+function EffectsPopover() {
+  // All visual effects are intentionally disabled — they're staged for a
+  // later phase once the print pipeline can flatten them safely.
+  const styles = [
+    { key: "original", label: "Original", active: true },
+    { key: "shadow", label: "Shadow", active: false, disabled: true },
+    { key: "highlight", label: "Highlight", active: false, disabled: true },
+    { key: "glitch", label: "Glitch", active: false, disabled: true },
+    { key: "echo", label: "Echo", active: false, disabled: true },
+  ];
+
+  return (
+    <SmartPopover
+      align="auto"
+      side="auto"
+      className="w-64 p-3"
+      trigger={
+        <button
+          aria-label="Effects"
+          className="w-8 h-8 rounded hover:bg-vp-rail flex items-center justify-center shrink-0"
+        >
+          <Sparkles className="w-4 h-4" />
+        </button>
+      }
+    >
+      <div>
+        <div className="text-xs font-semibold mb-2">Style</div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {styles.map((s) => (
+            <button
+              key={s.key}
+              disabled={s.disabled}
+              className={[
+                "h-9 rounded border text-xs font-medium",
+                s.active
+                  ? "border-vp-blue bg-vp-blue-light text-vp-blue"
+                  : "border-vp-border hover:border-vp-blue text-vp-ink",
+                s.disabled
+                  ? "opacity-40 cursor-not-allowed hover:border-vp-border"
+                  : "",
+              ].join(" ")}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3">
+        <div className="text-xs font-semibold mb-2">Shape</div>
+        <div className="grid grid-cols-2 gap-1.5">
+          <button className="h-9 rounded border border-vp-blue bg-vp-blue-light text-vp-blue text-xs font-medium">
+            None
+          </button>
+          <button
+            disabled
+            className="h-9 rounded border border-vp-border text-xs font-medium opacity-40 cursor-not-allowed"
+          >
+            Curve
+          </button>
+        </div>
+      </div>
+    </SmartPopover>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Advanced popover                                                    */
+/* ------------------------------------------------------------------ */
+
+function AdvancedPopover({
+  selected,
+  patch,
+  variant,
+}: {
+  selected: Selected;
+  patch: Patch;
+  variant: "text" | "object";
+}) {
+  return (
+    <SmartPopover
+      align="auto"
+      side="auto"
+      className="w-60 p-3 space-y-3"
+      trigger={
+        <button
+          aria-label="Advanced"
+          className="w-8 h-8 rounded hover:bg-vp-rail flex items-center justify-center shrink-0"
+        >
+          <Sliders className="w-4 h-4" />
+        </button>
+      }
+    >
+      <Slider
+        label="Opacity"
+        min={0}
+        max={1}
+        step={0.01}
+        value={Number(selected.opacity || 1)}
+        onChange={(v) => patch({ opacity: v })}
+        display={`${Math.round(Number(selected.opacity || 1) * 100)}%`}
+      />
+      <Slider
+        label="Rotation"
+        min={0}
+        max={360}
+        step={1}
+        value={Number(selected.angle || 0)}
+        onChange={(v) => patch({ angle: v })}
+        display={`${Math.round(Number(selected.angle || 0))}°`}
+      />
+      {variant === "text" && (
+        <>
           <Slider
             label="Line height"
             min={0.8}
@@ -214,142 +436,9 @@ function TextControls({
             onChange={(v) => patch({ charSpacing: v })}
             display={String(Math.round(Number(selected.charSpacing || 0)))}
           />
-        </div>
-      </Popover>
-    </>
-  );
-}
-
-function ObjectControls({
-  selected,
-  patch,
-}: {
-  selected: NonNullable<ReturnType<typeof useCanvasStore.getState>["selected"]>;
-  patch: ReturnType<typeof useCanvasStore.getState>["patchActive"];
-}) {
-  return (
-    <>
-      <ColorButton
-        value={selected.fill || "#000000"}
-        onChange={(c) => patch({ fill: c })}
-      />
-      <Divider />
-      <EffectsPopover selected={selected} patch={patch} />
-      <Divider />
-      <Popover
-        trigger={
-          <button
-            aria-label="Advanced"
-            className="w-8 h-8 rounded hover:bg-vp-rail flex items-center justify-center"
-          >
-            <Sliders className="w-4 h-4" />
-          </button>
-        }
-      >
-        <div className="w-60 p-3 space-y-3">
-          <Slider
-            label="Opacity"
-            min={0}
-            max={1}
-            step={0.01}
-            value={Number(selected.opacity || 1)}
-            onChange={(v) => patch({ opacity: v })}
-            display={`${Math.round(Number(selected.opacity || 1) * 100)}%`}
-          />
-          <Slider
-            label="Rotation"
-            min={0}
-            max={360}
-            step={1}
-            value={Number(selected.angle || 0)}
-            onChange={(v) => patch({ angle: v })}
-            display={`${Math.round(Number(selected.angle || 0))}°`}
-          />
-        </div>
-      </Popover>
-    </>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Effects popover                                                     */
-/* ------------------------------------------------------------------ */
-
-function EffectsPopover({
-  selected,
-  patch,
-}: {
-  selected: NonNullable<ReturnType<typeof useCanvasStore.getState>["selected"]>;
-  patch: ReturnType<typeof useCanvasStore.getState>["patchActive"];
-}) {
-  // All visual effects are intentionally disabled in the current build —
-  // they're staged for Phase 3 once the print pipeline can flatten them
-  // safely (shadows in particular don't survive a PDF/X-1a export reliably).
-  const styles = [
-    {
-      key: "original",
-      label: "Original",
-      active: true,
-      apply: () => {},
-    },
-    { key: "shadow", label: "Shadow", active: false, disabled: true },
-    { key: "highlight", label: "Highlight", active: false, disabled: true },
-    { key: "glitch", label: "Glitch", active: false, disabled: true },
-    { key: "echo", label: "Echo", active: false, disabled: true },
-  ];
-
-  return (
-    <Popover
-      trigger={
-        <button
-          aria-label="Effects"
-          className="w-8 h-8 rounded hover:bg-vp-rail flex items-center justify-center"
-        >
-          <Sparkles className="w-4 h-4" />
-        </button>
-      }
-    >
-      <div className="w-64 p-3 space-y-3">
-        <div>
-          <div className="text-xs font-semibold mb-2">Style</div>
-          <div className="grid grid-cols-3 gap-1.5">
-            {styles.map((s) => (
-              <button
-                key={s.key}
-                disabled={s.disabled}
-                onClick={s.apply}
-                className={[
-                  "h-9 rounded border text-xs font-medium",
-                  s.active
-                    ? "border-vp-blue bg-vp-blue-light text-vp-blue"
-                    : "border-vp-border hover:border-vp-blue text-vp-ink",
-                  s.disabled ? "opacity-40 cursor-not-allowed hover:border-vp-border" : "",
-                ].join(" ")}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div className="text-xs font-semibold mb-2">Shape</div>
-          <div className="grid grid-cols-2 gap-1.5">
-            <button
-              className="h-9 rounded border border-vp-blue bg-vp-blue-light text-vp-blue text-xs font-medium"
-              onClick={() => {}}
-            >
-              None
-            </button>
-            <button
-              disabled
-              className="h-9 rounded border border-vp-border text-xs font-medium opacity-40 cursor-not-allowed"
-            >
-              Curve
-            </button>
-          </div>
-        </div>
-      </div>
-    </Popover>
+        </>
+      )}
+    </SmartPopover>
   );
 }
 
@@ -358,7 +447,7 @@ function EffectsPopover({
 /* ------------------------------------------------------------------ */
 
 function Divider() {
-  return <div className="w-px h-5 bg-vp-border mx-0.5" />;
+  return <div className="w-px h-5 bg-vp-border mx-0.5 shrink-0" />;
 }
 
 function IconToggle({
@@ -378,7 +467,7 @@ function IconToggle({
       aria-pressed={active}
       onClick={onClick}
       className={[
-        "w-8 h-8 rounded flex items-center justify-center",
+        "w-8 h-8 rounded flex items-center justify-center shrink-0",
         active ? "bg-vp-blue-light text-vp-blue" : "hover:bg-vp-rail",
       ].join(" ")}
     >
@@ -406,9 +495,10 @@ function ColorButton({
   value: string;
   onChange: (c: string) => void;
 }) {
+  const addRecent = useCanvasStore((s) => s.addRecentColor);
   return (
     <label
-      className="w-8 h-8 rounded hover:bg-vp-rail flex items-center justify-center cursor-pointer"
+      className="w-8 h-8 rounded hover:bg-vp-rail flex items-center justify-center cursor-pointer shrink-0"
       title="Color"
     >
       <span
@@ -417,55 +507,128 @@ function ColorButton({
       />
       <input
         type="color"
-        value={value}
+        value={value && value.startsWith("#") ? value : "#000000"}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={() => addRecent(value)}
         className="sr-only"
       />
     </label>
   );
 }
 
-function Dropdown({
-  label,
-  items,
-  onSelect,
-  width = "w-40",
-}: {
-  label: string;
-  items: { label: string; value: string }[];
-  onSelect: (v: string) => void;
-  width?: string;
-}) {
-  const [open, setOpen] = useState(false);
+/* ------------------------------------------------------------------ */
+/* Case + list — text-only utilities                                  */
+/* ------------------------------------------------------------------ */
+
+function transformCase(text: string, mode: "upper" | "lower" | "title") {
+  if (mode === "upper") return text.toUpperCase();
+  if (mode === "lower") return text.toLowerCase();
+  // Title case: capitalise the first letter of each whitespace-separated word.
+  return text
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function CasePopover({ selected, patch }: { selected: Selected; patch: Patch }) {
+  const apply = (mode: "upper" | "lower" | "title") => {
+    patch({ text: transformCase(selected.text, mode) });
+  };
   return (
-    <Popover
-      open={open}
-      onOpenChange={setOpen}
+    <SmartPopover
+      align="auto"
+      side="auto"
+      className="p-1"
       trigger={
         <button
-          className={`${width} h-7 px-2 rounded border border-vp-border text-sm flex items-center justify-between hover:border-vp-blue`}
+          aria-label="Text case"
+          className="w-8 h-8 rounded hover:bg-vp-rail flex items-center justify-center shrink-0"
         >
-          <span className="truncate text-left">{label}</span>
-          <ChevronDown className="w-3.5 h-3.5 text-vp-muted ml-1" />
+          <CaseSensitive className="w-4 h-4" />
         </button>
       }
     >
-      <div className={`${width} max-h-60 overflow-y-auto vp-scroll py-1`}>
-        {items.map((i) => (
-          <button
-            key={i.value}
-            onClick={() => {
-              onSelect(i.value);
-              setOpen(false);
-            }}
-            className="w-full px-3 py-1.5 text-sm text-left hover:bg-vp-rail"
-            style={{ fontFamily: i.value }}
-          >
-            {i.label}
-          </button>
-        ))}
-      </div>
-    </Popover>
+      <button
+        onClick={() => apply("upper")}
+        className="w-full px-3 py-1.5 text-sm text-left hover:bg-vp-rail rounded"
+      >
+        UPPERCASE
+      </button>
+      <button
+        onClick={() => apply("lower")}
+        className="w-full px-3 py-1.5 text-sm text-left hover:bg-vp-rail rounded"
+      >
+        lowercase
+      </button>
+      <button
+        onClick={() => apply("title")}
+        className="w-full px-3 py-1.5 text-sm text-left hover:bg-vp-rail rounded"
+      >
+        Title Case
+      </button>
+    </SmartPopover>
+  );
+}
+
+/**
+ * Toggle bullet list. Detects whether every non-empty line already begins
+ * with the bullet sentinel and either strips or prepends accordingly.
+ * Fabric.IText doesn't have a real "list" type, so this is a textual
+ * approximation — good enough for the most common use case (multi-line
+ * label text with bullet points).
+ */
+const BULLET = "• ";
+
+function BulletListButton({
+  selected,
+  patch,
+}: {
+  selected: Selected;
+  patch: Patch;
+}) {
+  const lines = selected.text.split("\n");
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  const allBulleted =
+    nonEmpty.length > 0 && nonEmpty.every((l) => l.startsWith(BULLET));
+
+  const toggle = () => {
+    const next = lines
+      .map((l) =>
+        l.startsWith(BULLET)
+          ? l.slice(BULLET.length)
+          : l.trim().length === 0
+            ? l
+            : BULLET + l
+      )
+      .join("\n");
+    // If every line already had a bullet, the map above stripped them.
+    // Otherwise add bullets to every non-empty line that lacks one.
+    const final = allBulleted
+      ? lines
+          .map((l) => (l.startsWith(BULLET) ? l.slice(BULLET.length) : l))
+          .join("\n")
+      : lines
+          .map((l) =>
+            l.trim().length === 0 || l.startsWith(BULLET) ? l : BULLET + l
+          )
+          .join("\n");
+    patch({ text: final });
+    // `next` is the toggle result if the row was mixed; we use `final`
+    // (idempotent) for clarity. `next` is intentionally unused.
+    void next;
+  };
+
+  return (
+    <button
+      aria-label="Bullet list"
+      aria-pressed={allBulleted}
+      onClick={toggle}
+      className={[
+        "w-8 h-8 rounded flex items-center justify-center shrink-0",
+        allBulleted ? "bg-vp-blue-light text-vp-blue" : "hover:bg-vp-rail",
+      ].join(" ")}
+    >
+      <List className="w-4 h-4" />
+    </button>
   );
 }
 
@@ -501,45 +664,6 @@ function Slider({
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
       />
-    </div>
-  );
-}
-
-function Popover({
-  trigger,
-  children,
-  open: controlledOpen,
-  onOpenChange,
-}: {
-  trigger: React.ReactNode;
-  children: React.ReactNode;
-  open?: boolean;
-  onOpenChange?: (b: boolean) => void;
-}) {
-  const [uncontrolled, setUncontrolled] = useState(false);
-  const open = controlledOpen ?? uncontrolled;
-  const setOpen = (b: boolean) => {
-    onOpenChange ? onOpenChange(b) : setUncontrolled(b);
-  };
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
-  return (
-    <div ref={ref} className="relative">
-      <div onClick={() => setOpen(!open)}>{trigger}</div>
-      {open && (
-        <div className="absolute top-full left-0 mt-1 bg-white rounded-md shadow-vp-pop border border-vp-border z-30">
-          {children}
-        </div>
-      )}
     </div>
   );
 }

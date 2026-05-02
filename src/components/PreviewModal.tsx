@@ -29,11 +29,21 @@ export function PreviewModal() {
 
   useEffect(() => {
     if (!open || !canvas) return;
-    const guides = canvas.getObjects().filter((o) => {
-      const id = (o as any).id;
-      return id === "bleed" || id === "safety";
-    });
-    guides.forEach((g) => g.set("opacity", 0));
+    // The bleed rect IS the visible card (it carries the user's background
+    // colour in the new model), so we keep it during the snapshot. We only
+    // need to hide the dashed safety guide + temporarily strip the bleed's
+    // own dashed yellow stroke so the export looks like the printed card.
+    const safety = canvas
+      .getObjects()
+      .find((o) => (o as any).id === "safety");
+    const bleed = canvas
+      .getObjects()
+      .find((o) => (o as any).id === "bleed");
+    const prevSafetyOpacity = safety?.opacity ?? 1;
+    const prevBleedStroke = bleed?.stroke;
+    const prevBleedStrokeWidth = bleed?.strokeWidth;
+    if (safety) safety.set("opacity", 0);
+    if (bleed) bleed.set({ stroke: "transparent", strokeWidth: 0 });
     canvas.renderAll();
 
     const trimW = lengthMm * 10;
@@ -50,7 +60,12 @@ export function PreviewModal() {
     });
     setDataUrl(url);
 
-    guides.forEach((g) => g.set("opacity", 1));
+    if (safety) safety.set("opacity", prevSafetyOpacity);
+    if (bleed)
+      bleed.set({
+        stroke: prevBleedStroke as any,
+        strokeWidth: prevBleedStrokeWidth as any,
+      });
     canvas.renderAll();
   }, [open, canvas, lengthMm, widthMm]);
 

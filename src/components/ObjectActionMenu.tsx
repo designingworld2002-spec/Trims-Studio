@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import type { fabric } from "fabric";
 import {
   ArrowDown,
@@ -15,6 +14,7 @@ import {
 } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { VIRTUAL_SIZE } from "./Workspace";
+import { SmartPopover } from "./SmartPopover";
 
 /**
  * Floating action chip pinned above the active object.
@@ -113,18 +113,6 @@ function MoreMenu({
   canvas: fabric.Canvas | null;
   withActive: (fn: (obj: fabric.Object) => void) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
   const arrange = (action: "forward" | "backward" | "front" | "back") => {
     if (!canvas) return;
     const obj = canvas.getActiveObject();
@@ -135,7 +123,6 @@ function MoreMenu({
     if (action === "back") canvas.sendToBack(obj);
     canvas.requestRenderAll();
     canvas.fire("object:modified", { target: obj });
-    setOpen(false);
   };
 
   const center = (axis: "h" | "v") => {
@@ -149,7 +136,6 @@ function MoreMenu({
         obj.top = (obj.top ?? 0) + (cy - (br.top + br.height / 2));
       }
     });
-    setOpen(false);
   };
 
   const flip = (axis: "h" | "v") => {
@@ -157,37 +143,34 @@ function MoreMenu({
       if (axis === "h") obj.flipX = !obj.flipX;
       else obj.flipY = !obj.flipY;
     });
-    setOpen(false);
   };
 
   return (
-    <div ref={ref} className="relative">
-      <button
-        aria-label="More tools"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="w-7 h-7 rounded hover:bg-vp-rail flex items-center justify-center"
-      >
-        <MoreHorizontal className="w-4 h-4" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-md shadow-vp-pop border border-vp-border py-1 z-30">
-          <SectionLabel>Arrange</SectionLabel>
-          <Item icon={ChevronsUp} label="Bring to front" onClick={() => arrange("front")} />
-          <Item icon={ArrowUp} label="Bring forward" onClick={() => arrange("forward")} />
-          <Item icon={ArrowDown} label="Send backward" onClick={() => arrange("backward")} />
-          <Item icon={ChevronsDown} label="Send to back" onClick={() => arrange("back")} />
-
-          <SectionLabel>Align</SectionLabel>
-          <Item label="Center horizontally" onClick={() => center("h")} />
-          <Item label="Center vertically" onClick={() => center("v")} />
-
-          <SectionLabel>Flip</SectionLabel>
-          <Item icon={FlipHorizontal} label="Flip horizontal" onClick={() => flip("h")} />
-          <Item icon={FlipVertical} label="Flip vertical" onClick={() => flip("v")} />
-        </div>
-      )}
-    </div>
+    <SmartPopover
+      align="end"
+      side="auto"
+      className="w-52 py-1"
+      trigger={
+        <button
+          aria-label="More tools"
+          className="w-7 h-7 rounded hover:bg-vp-rail flex items-center justify-center"
+        >
+          <MoreHorizontal className="w-4 h-4" />
+        </button>
+      }
+    >
+      <SectionLabel>Arrange</SectionLabel>
+      <Item icon={ChevronsUp} label="Bring to front" onClick={() => arrange("front")} />
+      <Item icon={ArrowUp} label="Bring forward" onClick={() => arrange("forward")} />
+      <Item icon={ArrowDown} label="Send backward" onClick={() => arrange("backward")} />
+      <Item icon={ChevronsDown} label="Send to back" onClick={() => arrange("back")} />
+      <SectionLabel>Align</SectionLabel>
+      <Item label="Center horizontally" onClick={() => center("h")} />
+      <Item label="Center vertically" onClick={() => center("v")} />
+      <SectionLabel>Flip</SectionLabel>
+      <Item icon={FlipHorizontal} label="Flip horizontal" onClick={() => flip("h")} />
+      <Item icon={FlipVertical} label="Flip vertical" onClick={() => flip("v")} />
+    </SmartPopover>
   );
 }
 

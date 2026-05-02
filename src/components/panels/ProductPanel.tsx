@@ -1,5 +1,6 @@
 import { Link2, Link2Off } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
+import { RecentDesignsSection } from "./RecentDesignsSection";
 
 /**
  * Product Options panel.
@@ -110,6 +111,9 @@ export function ProductPanel() {
           ? " Dimensions are linked — changing one updates the other."
           : " Dimensions are independent."}
       </p>
+
+      {/* Logged-in user's saved designs (hidden when anonymous). */}
+      <RecentDesignsSection />
     </div>
   );
 }

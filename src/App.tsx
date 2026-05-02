@@ -5,6 +5,7 @@ import { SidePanel } from "./components/SidePanel";
 import { Workspace } from "./components/Workspace";
 import { BottomBar } from "./components/BottomBar";
 import { PreviewModal } from "./components/PreviewModal";
+import { UploadCenterModal } from "./components/UploadCenterModal";
 import { useCanvasStore } from "./store/canvasStore";
 import { history } from "./components/Workspace";
 
@@ -161,23 +162,28 @@ export default function App() {
   }, []);
 
   return (
-    <div className="h-full w-full flex flex-col">
+    /*
+     * Strict app layout: the OUTER container is the only viewport. It's
+     * `h-screen w-screen overflow-hidden` so the browser window itself
+     * never scrolls. Every interior region (TopBar, rail, panel, main)
+     * sizes itself within this fixed shell.
+     *
+     * `min-h-0` is intentional on the body row — without it flex children
+     * default to `min-height: auto`, which prevents `overflow-hidden`
+     * inside `<main>` from working.
+     */
+    <div className="h-screen w-screen overflow-hidden flex flex-col">
       <TopBar />
-      {/*
-        Layout split:
-          desktop (≥md):  [ rail | panel | main ]    (row)
-          mobile  (<md):  [ main / panel / rail ]    (column-reverse so rail
-                                                      sits at the bottom)
-      */}
-      <div className="flex-1 flex flex-col-reverse md:flex-row min-h-0">
+      <div className="flex-1 flex flex-col-reverse md:flex-row min-h-0 overflow-hidden">
         <LeftToolRail />
         <SidePanel />
-        <main className="flex-1 relative bg-vp-rail min-w-0 min-h-0">
+        <main className="flex-1 relative bg-vp-rail min-w-0 min-h-0 overflow-hidden">
           <Workspace />
           <BottomBar />
         </main>
       </div>
       <PreviewModal />
+      <UploadCenterModal />
     </div>
   );
 }

@@ -49,8 +49,11 @@ export function QrCodeModal({
             scaleX: scale,
             scaleY: scale,
           });
-          // Tag it so future code can identify QR images for re-encoding.
+          // Tag it so future code can identify QR images for re-encoding,
+          // plus seed the default colour state surfaced by the toolbar.
           (img as any).qrUrl = url.trim();
+          (img as any).qrFgColor = "#000000";
+          (img as any).qrBgColor = "#ffffff";
           canvas.add(img);
           canvas.setActiveObject(img);
           canvas.requestRenderAll();

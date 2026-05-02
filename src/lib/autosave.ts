@@ -76,6 +76,9 @@ export class Autosave {
         "selectable",
         "evented",
         "excludeFromExport",
+        "qrUrl",
+        "qrFgColor",
+        "qrBgColor",
       ]);
     } catch (e) {
       // Same defensive guard as HistoryManager — broken third-party objects
