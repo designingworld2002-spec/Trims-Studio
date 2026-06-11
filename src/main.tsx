@@ -4,6 +4,7 @@ import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useCanvasStore } from "./store/canvasStore";
 import { readUrlConfig } from "./lib/urlParams";
+import { getProductConfig } from "./config/productConfig";
 import { installFabricTextareaFix } from "./lib/fabricTextareaFix";
 import "./index.css";
 
@@ -18,8 +19,16 @@ installFabricTextareaFix();
  * autosave generate a fresh workId on every reload, defeating resume.
  */
 {
-  const cfg = readUrlConfig();
+  // Resolve the active product config FIRST so the URL parser can fall
+  // back to the right default dimensions when length/width are omitted.
+  const productHandle = new URLSearchParams(window.location.search).get(
+    "product"
+  );
+  const productConfig = getProductConfig(productHandle);
+
+  const cfg = readUrlConfig(productConfig.defaultDimensions);
   const s = useCanvasStore.getState();
+  s.setProductConfig(productConfig);
   s.setCanvasSize(cfg.lengthMm, cfg.widthMm);
   // Template mode is always locked; upload mode starts locked but the user
   // can break the link via the chain icon in the Product Options panel.

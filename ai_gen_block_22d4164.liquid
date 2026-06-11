@@ -1,0 +1,1273 @@
+{% doc %}
+  @prompt
+    A templates gallery that shows 3 top templates and a show more button that will open a modal that shows all the templates.
+  And these templates can be manged through particular product page because they are different for every product.
+{% enddoc %}
+{% assign ai_gen_id = block.id | replace: '_', '' | downcase %}
+
+{% style %}
+  .ai-templates-gallery-{{ ai_gen_id }} {
+    display: block;
+    width: {{ block.settings.desktop_width_percent }}%;
+    max-width: 100%;
+    padding: {{ block.settings.section_padding }}px 0;
+  }
+
+  .ai-templates-gallery__header-{{ ai_gen_id }} {
+    margin-bottom: {{ block.settings.header_spacing }}px;
+  }
+
+  .ai-templates-gallery__title-{{ ai_gen_id }} {
+    font-size: {{ block.settings.title_size }}px;
+    color: {{ block.settings.title_color }};
+    margin: 0 0 8px 0;
+  }
+
+  .ai-templates-gallery__description-{{ ai_gen_id }} {
+    font-size: {{ block.settings.description_size }}px;
+    color: {{ block.settings.description_color }};
+    margin: 0;
+  }
+
+  .ai-templates-gallery__grid-{{ ai_gen_id }} {
+    display: grid;
+    grid-template-columns: repeat({{ block.settings.columns_desktop }}, 1fr);
+    gap: {{ block.settings.grid_gap }}px;
+    margin-bottom: {{ block.settings.button_spacing }}px;
+  }
+
+  @media screen and (max-width: 749px) {
+    .ai-templates-gallery__grid-{{ ai_gen_id }} {
+      grid-template-columns: repeat({{ block.settings.columns_mobile }}, 1fr);
+    }
+  }
+
+  .ai-templates-gallery__item-{{ ai_gen_id }} {
+    position: relative;
+    cursor: pointer;
+    border-radius: {{ block.settings.card_border_radius }}px;
+    overflow: hidden;
+    border: {{ block.settings.card_border_width }}px solid {{ block.settings.card_border_color }};
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between; /* 🔥 IMPORTANT */
+    height: 100%;
+  }
+
+  .ai-templates-gallery__item-{{ ai_gen_id }}:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+  }
+
+  .ai-templates-gallery__image-wrapper-{{ ai_gen_id }} {
+    position: relative;
+    width: 100%;
+    padding-bottom: {{ block.settings.image_aspect_ratio }}%;
+    background-color: {{ block.settings.placeholder_bg_color }};
+  }
+
+  .ai-templates-gallery__image-{{ ai_gen_id }} {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .ai-templates-gallery__placeholder-{{ ai_gen_id }} {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .ai-templates-gallery__placeholder-{{ ai_gen_id }} svg {
+    width: 60%;
+    height: 60%;
+    opacity: 0.3;
+  }
+
+  .ai-templates-gallery__item-title-{{ ai_gen_id }} {
+    padding: {{ block.settings.card_padding }}px;
+    background-color: {{ block.settings.card_bg_color }};
+    font-size: {{ block.settings.card_title_size }}px;
+    color: {{ block.settings.card_title_color }};
+    text-align: center;
+    margin: 0;
+  }
+
+  .ai-templates-gallery__show-more-{{ ai_gen_id }} {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: center;
+    padding: {{ block.settings.button_padding_vertical }}px {{ block.settings.button_padding_horizontal }}px;
+    background-color: {{ block.settings.button_bg_color }};
+    color: {{ block.settings.button_text_color }};
+    border: {{ block.settings.button_border_width }}px solid {{ block.settings.button_border_color }};
+    border-radius: {{ block.settings.button_border_radius }}px;
+    font-size: {{ block.settings.button_font_size }}px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+
+  .ai-templates-gallery__show-more-{{ ai_gen_id }}:hover {
+    background-color: {{ block.settings.button_hover_bg_color }};
+    color: {{ block.settings.button_hover_text_color }};
+    border-color: {{ block.settings.button_hover_border_color }};
+  }
+
+  .ai-templates-gallery__modal-overlay-{{ ai_gen_id }} {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    z-index: 9999;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+  }
+
+  .ai-templates-gallery__modal-overlay-{{ ai_gen_id }}.active {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .ai-templates-gallery__modal-{{ ai_gen_id }} {
+    position: fixed;
+    top: 1mm;
+    left: 1mm;
+    width: calc(100vw - 2mm);
+    height: calc(100vh - 2mm);
+    max-width: calc(100vw - 2mm);
+    max-height: calc(100vh - 2mm);
+    background-color: {{ block.settings.modal_bg_color }};
+    border-radius: {{ block.settings.modal_border_radius }}px;
+    /* ← uses your schema setting */
+    z-index: 10000;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.3s ease;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ai-templates-gallery__modal-{{ ai_gen_id }}.active {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+  }
+
+
+  .ai-templates-gallery__modal-header-{{ ai_gen_id }} {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: {{ block.settings.modal_padding }}px;
+    border-bottom: 1px solid {{ block.settings.modal_border_color }};
+  }
+
+  .ai-templates-gallery__modal-title-{{ ai_gen_id }} {
+    font-size: {{ block.settings.modal_title_size }}px;
+    color: {{ block.settings.modal_title_color }};
+    margin: 0;
+  }
+
+  .ai-templates-gallery__modal-close-{{ ai_gen_id }} {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 8px;
+    color: {{ block.settings.modal_close_color }};
+    transition: opacity 0.3s ease;
+  }
+
+  .ai-templates-gallery__modal-close-{{ ai_gen_id }}:hover {
+    opacity: 0.7;
+  }
+
+  .ai-templates-gallery__modal-body-{{ ai_gen_id }} {
+    padding: {{ block.settings.modal_padding }}px;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .ai-templates-gallery__modal-grid-{{ ai_gen_id }} {
+    display: grid;
+    grid-template-columns: repeat({{ block.settings.modal_columns_desktop }}, 1fr);
+    gap: {{ block.settings.modal_grid_gap }}px;
+  }
+
+  @media screen and (max-width: 749px) {
+    .ai-templates-gallery__modal-grid-{{ ai_gen_id }} {
+      grid-template-columns: repeat({{ block.settings.modal_columns_mobile }}, 1fr);
+    }
+  }
+
+  .ai-templates-gallery__empty-state-{{ ai_gen_id }} {
+    text-align: center;
+    padding: 40px 20px;
+    color: {{ block.settings.empty_state_color }};
+  }
+
+  .ai-templates-gallery__empty-state-{{ ai_gen_id }} svg {
+    width: 100px;
+    height: 100px;
+    margin-bottom: 16px;
+    opacity: 0.3;
+  }
+
+  .ai-templates-gallery__empty-state-text-{{ ai_gen_id }} {
+    font-size: 16px;
+    margin: 0;
+  }
+
+  .template-config-btn {
+    display: block;
+    width: 90%;
+    /* 🔥 important */
+    margin: 12px auto 6px auto;
+    /* 🔥 center align */
+    
+    padding: 10px 24px;
+    background: black;
+    color: white;
+    border: none;
+    border-radius: 999px; /* pill shape */
+    cursor: pointer;
+    font-size: 10px;
+  }
+
+  .template-config-btn:hover {
+    background: #333;
+  }
+
+  /* ── Lightbox ── */
+  .tg-lightbox-overlay-{{ ai_gen_id }} {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 10999;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
+  }
+  .tg-lightbox-overlay-{{ ai_gen_id }}.active {
+    opacity: 1;
+    visibility: visible;
+  }
+  .tg-lightbox-{{ ai_gen_id }} {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.95);
+    width: calc(100vw - 40px);
+    max-width: 1200px;
+    height: calc(100vh - 40px);
+    max-height: 800px;
+    background: #fff;
+    border-radius: 12px;
+    z-index: 11000;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.25s ease;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .tg-lightbox-{{ ai_gen_id }}.active {
+    opacity: 1;
+    visibility: visible;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  .tg-lightbox__close-{{ ai_gen_id }} {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: rgba(0,0,0,0.08);
+    border: none;
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 2;
+    transition: background 0.2s;
+  }
+  .tg-lightbox__close-{{ ai_gen_id }}:hover { background: rgba(0,0,0,0.18); }
+  .tg-lightbox__body-{{ ai_gen_id }} {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+  /* Left: image viewer */
+  .tg-lightbox__viewer-{{ ai_gen_id }} {
+    flex: 0 0 65%;
+    position: relative;
+    background: #f5f5f5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .tg-lightbox__main-img-{{ ai_gen_id }} {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+  .tg-lightbox__arrow-{{ ai_gen_id }} {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(255,255,255,0.9);
+    border: none;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    transition: background 0.2s;
+    z-index: 2;
+  }
+  .tg-lightbox__arrow-{{ ai_gen_id }}:hover { background: #fff; }
+  .tg-lightbox__arrow-{{ ai_gen_id }}.prev { left: 12px; }
+  .tg-lightbox__arrow-{{ ai_gen_id }}.next { right: 12px; }
+  .tg-lightbox__arrow-{{ ai_gen_id }}.hidden { display: none; }
+  /* Right: info panel */
+  .tg-lightbox__info-{{ ai_gen_id }} {
+    flex: 0 0 35%;
+    display: flex;
+    flex-direction: column;
+    padding: 24px 20px;
+    border-left: 1px solid #e6e6e6;
+    overflow-y: auto;
+    gap: 16px;
+  }
+  .tg-lightbox__template-title-{{ ai_gen_id }} {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    color: #111;
+  }
+  .tg-lightbox__thumbs-{{ ai_gen_id }} {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .tg-lightbox__thumb-{{ ai_gen_id }} {
+    width: 60px;
+    height: 60px;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: border-color 0.2s;
+  }
+  .tg-lightbox__thumb-{{ ai_gen_id }}.active {
+    border-color: #000;
+  }
+  .tg-lightbox__edit-btn-{{ ai_gen_id }} {
+    display: block;
+    width: 100%;
+    margin-top: auto;
+    padding: 12px 24px;
+    background: #000;
+    color: #fff;
+    border: none;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    text-align: center;
+    transition: background 0.2s;
+  }
+  .tg-lightbox__edit-btn-{{ ai_gen_id }}:hover { background: #333; }
+  /* Mobile */
+  @media screen and (max-width: 749px) {
+    .tg-lightbox__body-{{ ai_gen_id }} { flex-direction: column; }
+    .tg-lightbox__viewer-{{ ai_gen_id }} { flex: 0 0 55%; }
+    .tg-lightbox__info-{{ ai_gen_id }} {
+      flex: 1;
+      border-left: none;
+      border-top: 1px solid #e6e6e6;
+    }
+  }
+{% endstyle %}
+
+<templates-gallery-{{ ai_gen_id }}
+  class="ai-templates-gallery-{{ ai_gen_id }}"
+  {{ block.shopify_attributes }}
+>
+  {% if block.settings.show_header %}
+    <div class="ai-templates-gallery__header-{{ ai_gen_id }}">
+      {% if block.settings.title != blank %}
+        <h2 class="ai-templates-gallery__title-{{ ai_gen_id }}">{{ block.settings.title }}</h2>
+      {% endif %}
+      {% if block.settings.description != blank %}
+        <p class="ai-templates-gallery__description-{{ ai_gen_id }}">{{ block.settings.description }}</p>
+      {% endif %}
+   
+    </div>
+  {% endif %}
+
+  {% liquid
+    assign templates = product.metafields.custom.templates.value
+    assign has_templates = false
+    if templates and templates.size > 0
+      assign has_templates = true
+    endif
+  %}
+
+  {% if has_templates %}
+    <div class="ai-templates-gallery__grid-{{ ai_gen_id }}">
+      {% for template in templates limit: 3 %}
+        <div class="ai-templates-gallery__item-{{ ai_gen_id }}">
+          
+        
+          <div class="ai-templates-gallery__image-wrapper-{{ ai_gen_id }}"
+            data-open-lightbox
+            data-template-id="{{ forloop.index0 }}"
+            data-template-image="https:{{ template.image | image_url: width: 1200 }}"
+            data-template-name="{{ template.title | escape }}"
+            data-template-json="{{ template.fabric_json_url }}"
+            data-template-width="{{ template.width }}"
+            data-template-height="{{ template.height }}"
+            data-template-images="{% if template.images %}{% for img in template.images %}https:{{ img | image_url: width: 1200 }}{% unless forloop.last %}|{% endunless %}{% endfor %}{% endif %}"
+            style="cursor: pointer;"
+          >
+            {% if template.image %}
+              <img
+                src="{{ template.image | image_url: width: 600 }}"
+                alt="{{ template.title | escape }}"
+                loading="lazy"
+                class="ai-templates-gallery__image-{{ ai_gen_id }}"
+                width="600"
+                height="600"
+              >
+            {% endif %}
+     
+          </div>
+
+          <h3 class="ai-templates-gallery__item-title-{{ ai_gen_id }}">
+            {{ template.title }}
+          </h3>
+        </div>
+      {% endfor %}
+    </div>
+
+    {% if templates.size > 3 %}
+      <button class="ai-templates-gallery__show-more-{{ ai_gen_id }}" data-action="open-modal">
+        {{ block.settings.button_text }}
+      </button>
+   
+    {% endif %}
+
+    <div class="ai-templates-gallery__modal-overlay-{{ ai_gen_id }}" data-modal-overlay></div>
+
+    <div class="ai-templates-gallery__modal-{{ ai_gen_id }}" data-modal>
+      <div class="ai-templates-gallery__modal-header-{{ ai_gen_id }}">
+        <h3 class="ai-templates-gallery__modal-title-{{ ai_gen_id }}">{{ block.settings.modal_title }}</h3>
+        <button class="ai-templates-gallery__modal-close-{{ ai_gen_id }}" data-action="close-modal" aria-label="Close modal">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+        
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="ai-templates-gallery__modal-body-{{ ai_gen_id }}">
+        <div class="ai-templates-gallery__modal-grid-{{ ai_gen_id }}">
+          {% for template in templates %}
+            <div class="ai-templates-gallery__item-{{ ai_gen_id }}" data-template-index="{{ forloop.index0 }}">
+              <div class="ai-templates-gallery__image-wrapper-{{ ai_gen_id }}"
+                data-open-lightbox
+                data-template-id="{{ forloop.index0 }}"
+                data-template-image="https:{{ template.image | image_url: width: 1200 }}"
+                data-template-name="{{ template.name | escape }}"
+                data-template-json="{{ template.fabric_json_url }}"
+                data-template-width="{{ template.width }}"
+                data-template-height="{{ template.height }}"
+                data-template-images="{% if template.images.value %}{% for img in template.images.value %}https:{{ img | image_url: width: 1200 }}{% unless forloop.last %}|{% endunless %}{% endfor %}{% endif %}"
+                style="cursor: pointer;"
+              >
+                {% if template.image %}
+                  <img
+                    src="{{ template.image | image_url: width: 600 }}"
+                    alt="{{ template.title | escape }}"
+                    loading="lazy"
+                    class="ai-templates-gallery__image-{{ ai_gen_id }}"
+                    width="600"
+                    height="600"
+                 
+                  >
+                {% else %}
+                  <div class="ai-templates-gallery__placeholder-{{ ai_gen_id }}">
+                    {{ 'image' | placeholder_svg_tag }}
+                  </div>
+                {% endif %}
+              </div>
+              {% if template.title != blank %}
+                <h3 class="ai-templates-gallery__item-title-{{ ai_gen_id }}">{{ template.title }}</h3>
+              {% endif %}
+              <button 
+                class="template-config-btn"
+                data-template-id="{{ forloop.index0 }}"
+                data-template-image="https:{{ template.image | image_url: width: 600 }}"
+                data-template-name="{{ template.title }}"
+                data-template-json="{{ template.fabric_json_url }}"
+                data-template-width="{{ template.width }}"
+                data-template-height="{{ template.height }}"
+              >
+           
+                Edit Design
+              </button>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% else %}
+    <div class="ai-templates-gallery__empty-state-{{ ai_gen_id }}">
+      {{ 'image' | placeholder_svg_tag }}
+      <p class="ai-templates-gallery__empty-state-text-{{ ai_gen_id }}">
+        
+        {{ block.settings.empty_state_message }}
+      </p>
+    </div>
+  {% endif %}
+
+  <div class="tg-lightbox-overlay-{{ ai_gen_id }}" data-lightbox-overlay></div>
+  <div class="tg-lightbox-{{ ai_gen_id }}" data-lightbox aria-modal="true" role="dialog">
+    <button class="tg-lightbox__close-{{ ai_gen_id }}" data-lightbox-close aria-label="Close">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      </svg>
+    </button>
+    <div class="tg-lightbox__body-{{ ai_gen_id }}">
+      <div class="tg-lightbox__viewer-{{ ai_gen_id }}">
+        <button class="tg-lightbox__arrow-{{ ai_gen_id }} prev" data-lightbox-prev aria-label="Previous">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <img class="tg-lightbox__main-img-{{ ai_gen_id }}" data-lightbox-main-img src="{{ '' | asset_url }}" alt="" width="1" height="1">
+        <button class="tg-lightbox__arrow-{{ ai_gen_id }} next" data-lightbox-next aria-label="Next">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+      </div>
+      <div class="tg-lightbox__info-{{ ai_gen_id }}">
+        <h3 class="tg-lightbox__template-title-{{ ai_gen_id }}" data-lightbox-title></h3>
+        <div class="tg-lightbox__thumbs-{{ ai_gen_id }}" data-lightbox-thumbs></div>
+        <button class="tg-lightbox__edit-btn-{{ ai_gen_id }} template-config-btn" data-lightbox-edit-btn>Edit Design</button>
+      </div>
+    </div>
+  </div>
+</templates-gallery-{{ ai_gen_id }}>
+
+<script>
+  (function() {
+    // ⚙️ Studio configuration — change these if needed
+    const STUDIO_BASE_URL = 'https://studio.trims.in';
+    const FINALIZE_PAGE_URL = '/pages/finalize';
+
+    class TemplatesGallery{{ ai_gen_id }} extends HTMLElement {
+      constructor() {
+        super();
+      }
+
+      connectedCallback() {
+        this.modal = this.querySelector('[data-modal]');
+        this.modalOverlay = this.querySelector('[data-modal-overlay]');
+        this.openButton = this.querySelector('[data-action="open-modal"]');
+        this.closeButton = this.querySelector('[data-action="close-modal"]');
+
+        // Move modal and overlay to body to escape stacking context
+        if (this.modal) document.body.appendChild(this.modal);
+        if (this.modalOverlay) document.body.appendChild(this.modalOverlay);
+
+        this.setupEventListeners();
+
+        // 🔥 FIX: Correctly select and move BOTH the lightbox and its overlay to the body
+        this.lightbox = this.querySelector('[data-lightbox]');
+        this.lightboxOverlay = this.querySelector('[data-lightbox-overlay]');
+        
+        if (this.lightbox) document.body.appendChild(this.lightbox);
+        if (this.lightboxOverlay) document.body.appendChild(this.lightboxOverlay);
+
+        this.lightboxImages = [];
+        this.lightboxIndex = 0;
+        this.setupLightbox();
+      }
+
+      setupEventListeners() {
+        // Open modal
+        if (this.openButton) {
+          this.openButton.addEventListener('click', () => this.openModal());
+        }
+
+        // Close modal (X button)
+        if (this.closeButton) {
+          this.closeButton.addEventListener('click', () => this.closeModal());
+        }
+
+        // Close on overlay click
+        if (this.modalOverlay) {
+          this.modalOverlay.addEventListener('click', () => this.closeModal());
+        }
+
+        // Close on Escape key
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape' && this.modal && this.modal.classList.contains('active')) {
+            this.closeModal();
+          }
+        });
+        
+        // 🎯 Wire up Edit Design buttons
+        const editButtons = document.querySelectorAll('.template-config-btn');
+        editButtons.forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.handleEditDesign(btn);
+          });
+        });
+      }
+
+      openModal() {
+        if (this.modal && this.modalOverlay) {
+          this.modal.classList.add('active');
+          this.modalOverlay.classList.add('active');
+          document.body.style.overflow = 'hidden';
+        }
+      }
+
+      closeModal() {
+        if (this.modal && this.modalOverlay) {
+          this.modal.classList.remove('active');
+          this.modalOverlay.classList.remove('active');
+          document.body.style.overflow = '';
+        }
+      }
+
+      setupLightbox() {
+        const lb = this.lightbox;
+        const overlay = this.lightboxOverlay;
+        if (!lb || !overlay) return;
+        
+        // Open on image wrapper click
+        document.querySelectorAll('[data-open-lightbox]').forEach(wrapper => {
+          wrapper.style.cursor = 'pointer';
+          wrapper.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.openLightbox(wrapper);
+          });
+        });
+        
+        // Close button
+        lb.querySelector('[data-lightbox-close]')?.addEventListener('click', () => this.closeLightbox());
+        overlay.addEventListener('click', () => this.closeLightbox());
+        
+        // Arrows
+        lb.querySelector('[data-lightbox-prev]')?.addEventListener('click', () => this.lightboxNav(-1));
+        lb.querySelector('[data-lightbox-next]')?.addEventListener('click', () => this.lightboxNav(1));
+        
+        // Edit Design button
+        lb.querySelector('[data-lightbox-edit-btn]')?.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.handleEditDesign(lb.querySelector('[data-lightbox-edit-btn]'));
+        });
+        
+        // Escape key
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape' && lb.classList.contains('active')) this.closeLightbox();
+        });
+      }
+
+      openLightbox(wrapper) {
+        const lb = this.lightbox;
+        const overlay = this.lightboxOverlay;
+        if (!lb || !overlay) return;
+        
+        // Build images array
+        const imagesRaw = wrapper.getAttribute('data-template-images') || '';
+        const fallback = wrapper.getAttribute('data-template-image') || '';
+        this.lightboxImages = imagesRaw ? imagesRaw.split('|').filter(Boolean) : (fallback ? [fallback] : []);
+        if (!this.lightboxImages.length) return;
+        this.lightboxIndex = 0;
+        
+        // Populate info panel
+        lb.querySelector('[data-lightbox-title]').textContent = wrapper.getAttribute('data-template-name') || '';
+        
+        // Set edit btn data attrs
+        const editBtn = lb.querySelector('[data-lightbox-edit-btn]');
+        if (editBtn) {
+          editBtn.setAttribute('data-template-id', wrapper.getAttribute('data-template-id') || '');
+          editBtn.setAttribute('data-template-image', wrapper.getAttribute('data-template-image') || '');
+          editBtn.setAttribute('data-template-name', wrapper.getAttribute('data-template-name') || '');
+          editBtn.setAttribute('data-template-json', wrapper.getAttribute('data-template-json') || '');
+          editBtn.setAttribute('data-template-width', wrapper.getAttribute('data-template-width') || '');
+          editBtn.setAttribute('data-template-height', wrapper.getAttribute('data-template-height') || '');
+        }
+        
+        // Build thumbnails
+        const thumbsContainer = lb.querySelector('[data-lightbox-thumbs]');
+        if (thumbsContainer) {
+          thumbsContainer.innerHTML = '';
+          this.lightboxImages.forEach((src, i) => {
+            const img = document.createElement('img');
+            img.src = src;
+            img.className = `tg-lightbox__thumb-${lb.className.match(/tg-lightbox-([a-z0-9]+)/)?.[1] || ''} ${i === 0 ? 'active' : ''}`;
+            img.addEventListener('click', () => { this.lightboxIndex = i; this.lightboxRender(); });
+            thumbsContainer.appendChild(img);
+          });
+        }
+        
+        // Show/hide arrows
+        const showArrows = this.lightboxImages.length > 1;
+        lb.querySelector('[data-lightbox-prev]')?.classList.toggle('hidden', !showArrows);
+        lb.querySelector('[data-lightbox-next]')?.classList.toggle('hidden', !showArrows);
+        this.lightboxRender();
+        lb.classList.add('active');
+        overlay.classList.add('active');
+        document.body.style.overflow = 'hidden';
+      }
+
+      lightboxRender() {
+        const lb = this.lightbox;
+        if (!lb) return;
+        const mainImg = lb.querySelector('[data-lightbox-main-img]');
+        if (mainImg) {
+          mainImg.src = this.lightboxImages[this.lightboxIndex];
+          mainImg.alt = `Image ${this.lightboxIndex + 1}`;
+        }
+        // Update thumb active state
+        lb.querySelectorAll('[data-lightbox-thumbs] img').forEach((img, i) => {
+          img.classList.toggle('active', i === this.lightboxIndex);
+        });
+      }
+
+      lightboxNav(dir) {
+        this.lightboxIndex = (this.lightboxIndex + dir + this.lightboxImages.length) % this.lightboxImages.length;
+        this.lightboxRender();
+      }
+
+      closeLightbox() {
+        const lb = this.lightbox;
+        const overlay = this.lightboxOverlay;
+        lb?.classList.remove('active');
+        overlay?.classList.remove('active');
+        document.body.style.overflow = '';
+      }
+
+      handleEditDesign(btn) {
+        // Read template data from button
+        const templateId = btn.getAttribute('data-template-id') || '';
+        const templateName = btn.getAttribute('data-template-name') || '';
+        const templateImage = btn.getAttribute('data-template-image') || '';
+        const templateJson = btn.getAttribute('data-template-json') || '';
+        const templateWidth = btn.getAttribute('data-template-width') || '';
+        const templateHeight = btn.getAttribute('data-template-height') || '';
+        
+        // Read product info from page
+        const productHandle = '{{ product.handle }}';
+        const productTitle = `{{ product.title | escape }}`;
+        const customerId = '{{ customer.id }}'
+
+        // Build studio URL with all params
+        const params = new URLSearchParams({
+          mode: 'template',
+          width: templateWidth,
+          height: templateHeight,
+          template_id: templateId,
+          template_name: templateName,
+          template_image: templateImage,
+          template_json: templateJson,
+          product: productHandle,
+          product_title: productTitle
+        });
+        if (customerId && customerId !== '') {
+          params.append('customer_id', customerId);
+        }
+        
+        const studioUrl = `${STUDIO_BASE_URL}/?${params.toString()}`;
+        // Redirect to studio
+        window.location.href = studioUrl;
+      }
+    }
+
+    customElements.define('templates-gallery-{{ ai_gen_id }}', TemplatesGallery{{ ai_gen_id }});
+  })();
+</script>
+
+{% schema %}
+{
+  "name": "Templates gallery",
+  "tag": null,
+  "settings": [
+    {
+      "type": "header",
+      "content": "Gallery header"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_header",
+      "label": "Show header",
+      "default": true
+    },
+    {
+      "type": "text",
+      "id": "title",
+      "label": "Title",
+   
+      "default": "Choose a template"
+    },
+    {
+      "type": "textarea",
+      "id": "description",
+      "label": "Description",
+      "default": "Select from our collection of professionally designed templates"
+    },
+    {
+      "type": "range",
+      "id": "title_size",
+      "label": "Title size",
+      "min": 16,
+      "max": 48,
+      "step": 2,
+      "unit": "px",
+      "default": 24
+    },
+    {
+      "type": "range",
+      "id": "description_size",
+      "label": "Description size",
+      "min": 12,
+      "max": 24,
+      "step": 1,
+      "unit": "px",
+      "default": 14
+    },
+    {
+      "type": "color",
+      "id": "title_color",
+      "label": "Title color",
+      "default": "#000000"
+    },
+    {
+      "type": "color",
+      "id": "description_color",
+      "label": "Description color",
+      "default": "#666666"
+    },
+    {
+      "type": "range",
+      "id": "header_spacing",
+      "label": "Header spacing",
+      "min": 8,
+      "max": 48,
+   
+      "step": 4,
+      "unit": "px",
+      "default": 24
+    },
+    {
+      "type": "header",
+      "content": "Layout"
+    },
+    {
+      "type": "range",
+      "id": "desktop_width_percent",
+      "label": "Desktop width",
+      "min": 50,
+      "max": 100,
+      "step": 5,
+      "unit": "%",
+  
+      "default": 100
+    },
+    {
+      "type": "range",
+      "id": "section_padding",
+      "label": "Section padding",
+      "min": 0,
+      "max": 80,
+      "step": 4,
+      "unit": "px",
+      "default": 40
+    },
+    {
+      "type": "select",
+      "id": "columns_desktop",
+      "label": "Columns on desktop",
+      "options": [
+        { "value": "3", "label": "3" },
+        { "value": "4", "label": "4" },
+        { "value": "5", "label": "5" },
+      ],
+      "default": "3"
+    },
+    {
+      "type": "select",
+      "id": "columns_mobile",
+      "label": "Columns on mobile",
+      "options": [
+  
+        { "value": "2", "label": "2" },
+        { "value": "3", "label": "3" },
+        { "value": "4", "label": "4" }
+      ],
+      "default": "2"
+    },
+    {
+      "type": "range",
+      "id": "grid_gap",
+      "label": "Grid gap",
+      "min": 8,
+      "max": 48,
+      
+      "step": 4,
+      "unit": "px",
+      "default": 20
+    },
+    {
+      "type": "header",
+      "content": "Template cards"
+    },
+    {
+      "type": "range",
+      "id": "image_aspect_ratio",
+      "label": "Image aspect ratio",
+      "min": 50,
+      "max": 150,
+      "step": 5,
+      "unit": "%",
+   
+      "default": 100
+    },
+    {
+      "type": "range",
+      "id": "card_border_radius",
+      "label": "Border radius",
+      "min": 0,
+      "max": 24,
+      "step": 2,
+      "unit": "px",
+      "default": 8
+    },
+    {
+      "type": "range",
+      "id": "card_border_width",
+      "label": "Border width",
+ 
+      "min": 0,
+      "max": 4,
+      "step": 1,
+      "unit": "px",
+      "default": 1
+    },
+    {
+      "type": "color",
+      "id": "card_border_color",
+      "label": "Border color",
+      "default": "#e6e6e6"
+    },
+    {
+      "type": "color",
+      "id": "card_bg_color",
+      "label": "Card background",
+      "default": "#ffffff"
+    },
+    {
+      "type": "range",
+      "id": "card_padding",
+      "label": "Card padding",
+      "min": 8,
+      "max": 32,
+      "step": 2,
+      "unit": "px",
+      "default": 16
+    },
+    {
+      "type": "range",
+      "id": "card_title_size",
+     
+      "label": "Title size",
+      "min": 12,
+      "max": 24,
+      "step": 1,
+      "unit": "px",
+      "default": 14
+    },
+    {
+      "type": "color",
+      "id": "card_title_color",
+      "label": "Title color",
+      "default": "#000000"
+    },
+    {
+      "type": "color",
+      "id": "placeholder_bg_color",
+   
+      "label": "Placeholder background",
+      "default": "#f5f5f5"
+    },
+    {
+      "type": "header",
+      "content": "Show more button"
+    },
+    {
+      "type": "text",
+      "id": "button_text",
+      "label": "Button text",
+      "default": "Show all templates"
+    },
+    {
+      "type": "range",
+      "id": "button_spacing",
+   
+      "label": "Button spacing",
+      "min": 8,
+      "max": 48,
+      "step": 4,
+      "unit": "px",
+      "default": 24
+    },
+    {
+      "type": "range",
+      "id": "button_padding_vertical",
+      "label": "Vertical padding",
+      "min": 8,
+      "max": 24,
+      "step": 2,
+      "unit": "px",
+  
+      "default": 12
+    },
+    {
+      "type": "range",
+      "id": "button_padding_horizontal",
+      "label": "Horizontal padding",
+      "min": 16,
+      "max": 48,
+      "step": 4,
+      "unit": "px",
+      "default": 24
+    },
+    {
+      "type": "range",
+      "id": "button_font_size",
+      "label": "Font size",
+      "min": 12,
+      "max": 20,
+      "step": 1,
+      "unit": "px",
+      "default": 14
+    },
+    {
+      "type": "range",
+      "id": "button_border_radius",
+      "label": "Border radius",
+      "min": 0,
+      "max": 40,
+      "step": 2,
+      "unit": "px",
+      "default": 8
+    },
+    {
+      "type": "range",
+      "id": "button_border_width",
+      "label": "Border width",
+      "min": 0,
+      "max": 4,
+      "step": 1,
+      "unit": "px",
+      "default": 1
+    },
+    {
+      "type": "color",
+      "id": "button_bg_color",
+      "label": "Background",
+      
+      "default": "#000000"
+    },
+    {
+      "type": "color",
+      "id": "button_text_color",
+      "label": "Text",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "button_border_color",
+      "label": "Border",
+      "default": "#000000"
+    },
+    {
+      "type": "color",
+      "id": "button_hover_bg_color",
+     
+      "label": "Hover background",
+      "default": "#333333"
+    },
+    {
+      "type": "color",
+      "id": "button_hover_text_color",
+      "label": "Hover text",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "button_hover_border_color",
+      "label": "Hover border",
+      "default": "#333333"
+    },
+    {
+      "type": "header",
+ 
+      "content": "Modal"
+    },
+    {
+      "type": "text",
+      "id": "modal_title",
+      "label": "Modal title",
+      "default": "All templates"
+    },
+    {
+      "type": "range",
+      "id": "modal_max_width",
+      "label": "Max width",
+      "min": 600,
+      "max": 1200,
+      "step": 50,
+     
+      "unit": "px",
+      "default": 1000
+    },
+    {
+      "type": "range",
+      "id": "modal_border_radius",
+      "label": "Border radius",
+      "min": 0,
+      "max": 24,
+      "step": 2,
+      "unit": "px",
+      "default": 12
+    },
+    {
+      "type": "range",
+      "id": "modal_padding",
+    
+      "label": "Padding",
+      "min": 16,
+      "max": 48,
+      "step": 4,
+      "unit": "px",
+      "default": 24
+    },
+    {
+      "type": "color",
+      "id": "modal_bg_color",
+      "label": "Background",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "modal_border_color",
+    
+      "label": "Border",
+      "default": "#e6e6e6"
+    },
+    {
+      "type": "range",
+      "id": "modal_title_size",
+      "label": "Title size",
+      "min": 16,
+      "max": 32,
+      "step": 2,
+      "unit": "px",
+      "default": 20
+    },
+    {
+      "type": "color",
+      "id": "modal_title_color",
+   
+      "label": "Title color",
+      "default": "#000000"
+    },
+    {
+      "type": "color",
+      "id": "modal_close_color",
+      "label": "Close icon color",
+      "default": "#000000"
+    },
+    {
+      "type": "select",
+      "id": "modal_columns_desktop",
+      "label": "Columns on desktop",
+      "options": [
+        { "value": "3", "label": "3" },
+        { "value": "4", "label": "4" },
+        { "value": "5", "label": "5" }
+      ],
+      "default": "5"
+    },
+    {
+      "type": "select",
+      "id": "modal_columns_mobile",
+      "label": "Columns on mobile",
+      "options": [
+        { "value": "2", "label": "2" },
+        { "value": "3", "label": "3" },
+        { "value": "4", "label": "4" }
+      ],
+      "default": "3"
+    },
+    {
+      "type": "range",
+      "id": "modal_grid_gap",
+      "label": "Grid gap",
+      "min": 8,
+      "max": 32,
+      "step": 4,
+      "unit": "px",
+      "default": 16
+    },
+ 
+    {
+      "type": "header",
+      "content": "Empty state"
+    },
+    {
+      "type": "textarea",
+      "id": "empty_state_message",
+      "label": "Message",
+      "default": "No templates available. Add templates to this product using the product metafield 'custom.templates'."
+    },
+    {
+      "type": "color",
+      "id": "empty_state_color",
+      "label": "Text color",
+      "default": "#999999"
+    }
+  ],
+  "presets": [
+    {
+      "name": "Templates gallery"
+    }
+  ]
+}
+{% endschema %}

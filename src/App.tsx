@@ -6,8 +6,10 @@ import { Workspace } from "./components/Workspace";
 import { BottomBar } from "./components/BottomBar";
 import { PreviewModal } from "./components/PreviewModal";
 import { UploadCenterModal } from "./components/UploadCenterModal";
+import { BackChooserModal } from "./components/BackChooserModal";
+import { FlipPreviewModal } from "./components/FlipPreviewModal";
 import { useCanvasStore } from "./store/canvasStore";
-import { history } from "./components/Workspace";
+import { history } from "./lib/historyAccessor";
 
 export default function App() {
   // URL params are read synchronously in main.tsx before render, so there's
@@ -184,6 +186,8 @@ export default function App() {
       </div>
       <PreviewModal />
       <UploadCenterModal />
+      <BackChooserModal />
+      <FlipPreviewModal />
     </div>
   );
 }

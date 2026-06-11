@@ -15,8 +15,10 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
-  background: #f0f2f5;
-  color: #0a1f44;
+  /* Soft warm-ish gray — matches the Vistaprint workspace backdrop. */
+  background: #f4f5f7;
+  /* Slightly softer ink than the previous saturated navy. */
+  color: #0f172a;
   overflow: hidden;
 }
 
@@ -24,18 +26,27 @@ button {
   font-family: inherit;
 }
 
-/* Hide native scrollbars in side panels but keep functionality */
+/* Hide native scrollbars in side panels but keep functionality. The
+   thumb only appears on hover for a calmer, more modern feel. */
 .vp-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #c0c5cf transparent;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 200ms ease;
+}
+.vp-scroll:hover {
+  scrollbar-color: #cbd5e1 transparent;
 }
 .vp-scroll::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 .vp-scroll::-webkit-scrollbar-thumb {
-  background: #c0c5cf;
+  background: transparent;
   border-radius: 3px;
+  transition: background 200ms ease;
+}
+.vp-scroll:hover::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
 }
 .vp-scroll::-webkit-scrollbar-track {
   background: transparent;
@@ -70,9 +81,12 @@ input[type="range"].vp-range::-moz-range-thumb {
   border: 2px solid white;
 }
 
-/* Canvas wrapper border + shadow */
+/* Canvas wrapper "paper" elevation — pronounced layered drop-shadow so
+   the design clearly floats as a sheet above the workspace. */
 .vp-canvas-shadow {
-  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
+  filter: drop-shadow(0 24px 40px rgba(15, 23, 42, 0.12))
+    drop-shadow(0 8px 14px rgba(15, 23, 42, 0.08))
+    drop-shadow(0 2px 4px rgba(15, 23, 42, 0.04));
 }
 
 /* Rolling logo — slow continuous spin so the button looks like it's

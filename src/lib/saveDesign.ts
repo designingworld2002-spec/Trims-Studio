@@ -1,10 +1,15 @@
-import type { fabric } from "fabric";
+import { fabric } from "fabric";
 import {
   getSupabase,
   isSupabaseConfigured,
   SUPABASE_DESIGNS_BUCKET,
   SHOPIFY_FINALIZE_URL,
 } from "./supabase";
+import type {
+  CanvasShape,
+  ShapeModifiers,
+  SideSnapshot,
+} from "@/store/canvasStore";
 
 /**
  * Final "Continue" save flow.
@@ -28,13 +33,39 @@ export interface SaveDesignInput {
   customerId: string | null;
   workId: string | null;
   templateId: string | null;
+  /** Active silhouette — included in the row + Shopify cart payload so
+   *  the production team has the exact blueprint. */
+  canvasShape: CanvasShape;
+  shapeModifiers: ShapeModifiers;
+  /** Which face is the LIVE canvas currently editing? Determines which
+   *  side gets its snapshot from the live canvas vs. an offscreen render
+   *  of the stored JSON. */
+  activeSide: "front" | "back";
+  /** Stored front-side snapshot (null if user only ever worked on back). */
+  frontDesign: SideSnapshot | null;
+  /** Stored back-side snapshot (null if product is single-sided or back
+   *  was never touched). */
+  backDesign: SideSnapshot | null;
+  /** Does the active product support a back side? */
+  supportsBackSide: boolean;
 }
 
 export interface SaveDesignResult {
   designId: string;
   previewUrl: string | null;
+  previewUrlBack: string | null;
   finalizeUrl: string;
   storedRemotely: boolean;
+}
+
+interface SidePayload {
+  /** PNG dataURL trimmed to the bleed rectangle. */
+  previewDataUrl: string;
+  /** Fabric JSON for this side's design. */
+  fabricJson: any;
+  /** mm dims at snapshot time. */
+  lengthMm: number;
+  widthMm: number;
 }
 
 const MM_TO_PX = 10;
@@ -46,25 +77,64 @@ export async function saveDesign(
 ): Promise<SaveDesignResult> {
   const { canvas } = input;
 
-  // 1. Render preview. The bleed rect IS the visible card (it carries the
-  // user's background colour), so we keep it during the snapshot. We only
-  // hide the dashed safety guide and temporarily strip the bleed's own
-  // dashed yellow stroke so the export looks like the printed card.
-  const safety = canvas
-    .getObjects()
-    .find((o) => (o as any).id === "safety");
-  const bleed = canvas
-    .getObjects()
-    .find((o) => (o as any).id === "bleed");
+  // 1. Capture LIVE canvas → PNG + JSON for the active side.
+  const live = snapshotLive(canvas, input.lengthMm, input.widthMm);
+
+  // 2. If the product is two-sided and the OTHER side has stored work,
+  //    render it offscreen so the final payload always includes BOTH
+  //    sides — never silently drop the back design.
+  const otherStored =
+    input.activeSide === "front" ? input.backDesign : input.frontDesign;
+  let otherSide: SidePayload | null = null;
+  if (input.supportsBackSide && otherStored) {
+    try {
+      otherSide = await snapshotFromStoredSnapshot(otherStored);
+    } catch (e) {
+      console.warn("[saveDesign] failed to render stored side, skipping:", e);
+    }
+  }
+
+  // Slot the two payloads into front / back so downstream uploads + URLs
+  // are unambiguous regardless of which face the user was editing.
+  const frontSide: SidePayload | null =
+    input.activeSide === "front" ? live : otherSide;
+  const backSide: SidePayload | null =
+    input.activeSide === "back" ? live : otherSide;
+
+  if (!isSupabaseConfigured()) {
+    return saveLocally(frontSide, backSide, input);
+  }
+  try {
+    return await saveToSupabase(frontSide, backSide, input);
+  } catch (e) {
+    console.warn(
+      "[trims-studio] Supabase save failed, falling back to localStorage:",
+      e
+    );
+    return saveLocally(frontSide, backSide, input);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Side snapshot helpers                                                */
+/* ------------------------------------------------------------------ */
+
+function snapshotLive(
+  canvas: fabric.Canvas,
+  lengthMm: number,
+  widthMm: number
+): SidePayload {
+  const safety = canvas.getObjects().find((o) => (o as any).id === "safety");
+  const bleed = canvas.getObjects().find((o) => (o as any).id === "bleed");
   const prevSafetyOpacity = safety?.opacity ?? 1;
-  const prevBleedStroke = bleed?.stroke;
-  const prevBleedStrokeWidth = bleed?.strokeWidth;
+  const prevBleedStroke = (bleed as any)?.stroke;
+  const prevBleedStrokeWidth = (bleed as any)?.strokeWidth;
   if (safety) safety.set("opacity", 0);
   if (bleed) bleed.set({ stroke: "transparent", strokeWidth: 0 });
   canvas.renderAll();
 
-  const trimW = input.lengthMm * MM_TO_PX;
-  const trimH = input.widthMm * MM_TO_PX;
+  const trimW = lengthMm * MM_TO_PX;
+  const trimH = widthMm * MM_TO_PX;
   const cx = VIRTUAL_SIZE / 2;
   const cy = VIRTUAL_SIZE / 2;
 
@@ -95,20 +165,74 @@ export async function saveDesign(
     "qrBgColor",
   ]);
 
-  // 2/3. Push to Supabase if configured, otherwise stash locally so dev
-  // mode still produces a Continue → finalize redirect.
-  if (!isSupabaseConfigured()) {
-    return saveLocally(previewDataUrl, fabricJson, input);
-  }
-  try {
-    return await saveToSupabase(previewDataUrl, fabricJson, input);
-  } catch (e) {
-    console.warn(
-      "[trims-studio] Supabase save failed, falling back to localStorage:",
-      e
-    );
-    return saveLocally(previewDataUrl, fabricJson, input);
-  }
+  return {
+    previewDataUrl,
+    fabricJson,
+    lengthMm,
+    widthMm,
+  };
+}
+
+/**
+ * Render a SideSnapshot (stored in the Zustand store) onto an off-screen
+ * fabric.StaticCanvas and export the PNG. Used to capture the side the
+ * user ISN'T currently editing, so the final payload always carries
+ * both faces.
+ */
+function snapshotFromStoredSnapshot(
+  snap: SideSnapshot
+): Promise<SidePayload> {
+  return new Promise((resolve, reject) => {
+    const off = new fabric.StaticCanvas(null as any, {
+      width: VIRTUAL_SIZE,
+      height: VIRTUAL_SIZE,
+    });
+    try {
+      const payload =
+        typeof snap.fabric === "string"
+          ? JSON.parse(snap.fabric)
+          : { ...(snap.fabric || {}) };
+      // Force the saved background colour to render via the bleed rect.
+      payload.background = snap.backgroundColor;
+      off.loadFromJSON(payload, () => {
+        off.getObjects().forEach((o: any) => {
+          if (o.id === "safety" || o.id === "holePunch") {
+            o.set("visible", false);
+          }
+          if (o.id === "bleed") {
+            o.set({
+              stroke: "transparent",
+              strokeWidth: 0,
+              fill: snap.backgroundColor,
+            });
+          }
+        });
+        off.renderAll();
+        const trimW = snap.lengthMm * MM_TO_PX;
+        const trimH = snap.widthMm * MM_TO_PX;
+        const cx = VIRTUAL_SIZE / 2;
+        const cy = VIRTUAL_SIZE / 2;
+        const previewDataUrl = off.toDataURL({
+          format: "png",
+          left: cx - trimW / 2,
+          top: cy - trimH / 2,
+          width: trimW,
+          height: trimH,
+          multiplier: PREVIEW_MULTIPLIER,
+        });
+        off.dispose();
+        resolve({
+          previewDataUrl,
+          fabricJson: payload,
+          lengthMm: snap.lengthMm,
+          widthMm: snap.widthMm,
+        });
+      });
+    } catch (e) {
+      off.dispose();
+      reject(e);
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -116,32 +240,58 @@ export async function saveDesign(
 /* ------------------------------------------------------------------ */
 
 async function saveToSupabase(
-  previewDataUrl: string,
-  fabricJson: any,
+  frontSide: SidePayload | null,
+  backSide: SidePayload | null,
   input: SaveDesignInput
 ): Promise<SaveDesignResult> {
   const supabase = getSupabase()!;
   const designId = crypto.randomUUID();
-
-  // 1) Convert dataURL → Blob and upload to storage.
-  const previewBlob = dataUrlToBlob(previewDataUrl);
   const folder = input.customerId ?? "anon";
-  const previewPath = `${folder}/${designId}.png`;
 
-  const { error: uploadErr } = await supabase.storage
-    .from(SUPABASE_DESIGNS_BUCKET)
-    .upload(previewPath, previewBlob, {
-      contentType: "image/png",
-      upsert: false,
-    });
-  if (uploadErr) throw new Error(`storage upload: ${uploadErr.message}`);
+  // Helper — upload one side's PNG and return its public URL + path.
+  const uploadSide = async (
+    side: SidePayload,
+    suffix: "front" | "back"
+  ): Promise<{ url: string; path: string }> => {
+    const path = `${folder}/${designId}-${suffix}.png`;
+    const { error: uploadErr } = await supabase.storage
+      .from(SUPABASE_DESIGNS_BUCKET)
+      .upload(path, dataUrlToBlob(side.previewDataUrl), {
+        contentType: "image/png",
+        upsert: false,
+      });
+    if (uploadErr)
+      throw new Error(`storage upload (${suffix}): ${uploadErr.message}`);
+    const { data: pub } = supabase.storage
+      .from(SUPABASE_DESIGNS_BUCKET)
+      .getPublicUrl(path);
+    const url = pub?.publicUrl ?? null;
+    if (!url) {
+      throw new Error(
+        `storage getPublicUrl returned no URL for ${suffix} — check bucket "${SUPABASE_DESIGNS_BUCKET}"`
+      );
+    }
+    return { url, path };
+  };
 
-  const { data: pub } = supabase.storage
-    .from(SUPABASE_DESIGNS_BUCKET)
-    .getPublicUrl(previewPath);
-  const previewUrl = pub?.publicUrl ?? null;
+  let frontUrl: string | null = null;
+  let frontPath: string | null = null;
+  let backUrl: string | null = null;
+  let backPath: string | null = null;
 
-  // 2) Insert the row.
+  if (frontSide) {
+    const f = await uploadSide(frontSide, "front");
+    frontUrl = f.url;
+    frontPath = f.path;
+  }
+  if (backSide) {
+    const b = await uploadSide(backSide, "back");
+    backUrl = b.url;
+    backPath = b.path;
+  }
+
+  // Row insert. `preview_url` keeps backwards compatibility for any
+  // storefront code still reading the legacy single-PNG field.
   const { error: insertErr } = await supabase.from("user_designs").insert({
     id: designId,
     customer_id: input.customerId,
@@ -149,24 +299,33 @@ async function saveToSupabase(
     product_title: input.productTitle,
     length_mm: input.lengthMm,
     width_mm: input.widthMm,
-    fabric_json: fabricJson,
-    preview_url: previewUrl,
-    preview_path: previewPath,
+    fabric_json: frontSide?.fabricJson ?? null,
+    fabric_json_back: backSide?.fabricJson ?? null,
+    preview_url: frontUrl,
+    preview_url_back: backUrl,
+    preview_path: frontPath,
+    preview_path_back: backPath,
     work_id: input.workId,
     source_template_id: input.templateId,
     meta: {
       ua: navigator.userAgent,
       savedAt: new Date().toISOString(),
+      canvasShape: input.canvasShape,
+      shapeModifiers: input.shapeModifiers,
+      supportsBackSide: input.supportsBackSide,
+      activeSide: input.activeSide,
     },
   });
   if (insertErr) throw new Error(`insert row: ${insertErr.message}`);
 
   return {
     designId,
-    previewUrl,
+    previewUrl: frontUrl,
+    previewUrlBack: backUrl,
     finalizeUrl: buildFinalizeUrl({
       designId,
-      previewUrl,
+      previewUrl: frontUrl,
+      previewUrlBack: backUrl,
       input,
     }),
     storedRemotely: true,
@@ -178,8 +337,8 @@ async function saveToSupabase(
 /* ------------------------------------------------------------------ */
 
 function saveLocally(
-  previewDataUrl: string,
-  fabricJson: any,
+  frontSide: SidePayload | null,
+  backSide: SidePayload | null,
   input: SaveDesignInput
 ): SaveDesignResult {
   const designId =
@@ -193,11 +352,18 @@ function saveLocally(
     product_title: input.productTitle,
     length_mm: input.lengthMm,
     width_mm: input.widthMm,
-    fabric_json: fabricJson,
-    preview_url: previewDataUrl, // local: keep the dataURL inline
+    fabric_json: frontSide?.fabricJson ?? null,
+    fabric_json_back: backSide?.fabricJson ?? null,
+    preview_url: frontSide?.previewDataUrl ?? null, // dev fallback: dataURL
+    preview_url_back: backSide?.previewDataUrl ?? null,
     preview_path: null,
+    preview_path_back: null,
     work_id: input.workId,
     source_template_id: input.templateId,
+    canvas_shape: input.canvasShape,
+    shape_modifiers: input.shapeModifiers,
+    active_side: input.activeSide,
+    supports_back_side: input.supportsBackSide,
     saved_at: new Date().toISOString(),
   };
   try {
@@ -207,10 +373,12 @@ function saveLocally(
   }
   return {
     designId,
-    previewUrl: previewDataUrl,
+    previewUrl: frontSide?.previewDataUrl ?? null,
+    previewUrlBack: backSide?.previewDataUrl ?? null,
     finalizeUrl: buildFinalizeUrl({
       designId,
       previewUrl: null,
+      previewUrlBack: null,
       input,
     }),
     storedRemotely: false,
@@ -234,18 +402,71 @@ function dataUrlToBlob(dataUrl: string): Blob {
 function buildFinalizeUrl(opts: {
   designId: string;
   previewUrl: string | null;
+  previewUrlBack: string | null;
   input: SaveDesignInput;
 }): string {
   const u = new URL(SHOPIFY_FINALIZE_URL);
   u.searchParams.set("design_id", opts.designId);
-  if (opts.previewUrl && opts.previewUrl.startsWith("http")) {
+
+  // Append the public preview URL so the storefront's Liquid script
+  // (`params.get('preview_url')`) can render the design image on the
+  // /pages/finalize page. We only accept absolute http(s) URLs — data
+  // URIs would explode the URL size, and relative paths can't be
+  // displayed by Shopify cross-domain. `URLSearchParams.set` percent-
+  // encodes the value automatically, so `:` and `/` are safe.
+  if (opts.previewUrl && /^https?:\/\//i.test(opts.previewUrl)) {
     u.searchParams.set("preview_url", opts.previewUrl);
+  } else if (opts.previewUrl) {
+    console.warn(
+      "[trims-studio] previewUrl is not an HTTP(S) URL; skipping `preview_url` param on the finalize redirect. " +
+        "This usually means Supabase wasn't configured at save time and the save fell back to localStorage. " +
+        `Got: ${opts.previewUrl.slice(0, 80)}…`
+    );
+  } else {
+    console.warn(
+      "[trims-studio] No previewUrl available for the finalize redirect. " +
+        "The /pages/finalize page won't be able to render the design image."
+    );
   }
+
+  // Two-sided support — pin the back-side PNG to the same redirect so the
+  // storefront can render both faces. Storefront should accept
+  // `preview_url_back` (preferred) or `preview_url2` (legacy alias).
+  if (opts.previewUrlBack && /^https?:\/\//i.test(opts.previewUrlBack)) {
+    u.searchParams.set("preview_url_back", opts.previewUrlBack);
+  }
+
   if (opts.input.productSlug)
     u.searchParams.set("product", opts.input.productSlug);
   u.searchParams.set("length", String(opts.input.lengthMm));
   u.searchParams.set("width", String(opts.input.widthMm));
   if (opts.input.customerId)
     u.searchParams.set("customer_id", opts.input.customerId);
-  return u.toString();
+  // Shape blueprint for the production team — pinned to the Shopify
+  // cart payload so the printer/cutter receives the exact silhouette.
+  u.searchParams.set("shape", opts.input.canvasShape);
+  if (opts.input.canvasShape === "round-corners") {
+    u.searchParams.set(
+      "corner_radius_mm",
+      String(opts.input.shapeModifiers.cornerRadiusMm)
+    );
+    u.searchParams.set("corners_mode", opts.input.shapeModifiers.cornersMode);
+  } else if (opts.input.canvasShape === "cut-corners") {
+    u.searchParams.set(
+      "slant_length_mm",
+      String(opts.input.shapeModifiers.slantLengthMm)
+    );
+    u.searchParams.set("corners_mode", opts.input.shapeModifiers.cornersMode);
+  } else if (opts.input.canvasShape === "star") {
+    u.searchParams.set(
+      "star_points",
+      String(opts.input.shapeModifiers.starPoints)
+    );
+  }
+
+  const out = u.toString();
+  // Make the final URL visible in the console so the merchant can
+  // confirm `preview_url` is present (or spot when it's missing).
+  console.info("[trims-studio] finalize redirect →", out);
+  return out;
 }

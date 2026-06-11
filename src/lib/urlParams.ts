@@ -70,7 +70,12 @@ function parsePositiveInt(raw: string | null, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-export function readUrlConfig(): UrlConfig {
+export function readUrlConfig(
+  defaultDimensions: { lengthMm: number; widthMm: number } = {
+    lengthMm: 90,
+    widthMm: 50,
+  }
+): UrlConfig {
   const params = new URLSearchParams(window.location.search);
 
   const mode = parseMode(params.get("mode"));
@@ -79,14 +84,17 @@ export function readUrlConfig(): UrlConfig {
   // If the URL has `height=` we treat it as the legacy schema where `width`
   // meant the long dimension. Otherwise the canonical naming wins:
   // `length` = long, `width` = short.
+  // When the URL omits dimensions entirely we fall back to the active
+  // product's `defaultDimensions` (passed in by main.tsx) rather than a
+  // hard-coded woven-label size.
   const usingLegacy = !params.has("length") && params.has("height");
   const lengthMm = parsePositiveInt(
     usingLegacy ? params.get("width") : params.get("length"),
-    90
+    defaultDimensions.lengthMm
   );
   const widthMm = parsePositiveInt(
     usingLegacy ? params.get("height") : params.get("width"),
-    50
+    defaultDimensions.widthMm
   );
 
   const productSlug = params.get("product");

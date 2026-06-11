@@ -54,8 +54,10 @@ export function UploadCenterModal() {
         setUploads([]);
         return;
       }
-      const list = await fetchRecentUploads(customerId);
-      if (!cancelled) setUploads(list);
+      const result = await fetchRecentUploads(customerId);
+      if (cancelled) return;
+      setUploads(result.uploads);
+      if (result.error) setError(result.error);
     })();
     return () => {
       cancelled = true;

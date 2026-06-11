@@ -19,6 +19,9 @@ export interface RecentDesign {
   length_mm: number;
   width_mm: number;
   preview_url: string | null;
+  /** Path to the preview PNG inside the storage bucket — needed to
+   *  clean up the file on delete. */
+  preview_path: string | null;
   fabric_json: any;
 }
 
@@ -31,7 +34,7 @@ export async function fetchRecentDesigns(
   const { data, error } = await supabase
     .from("user_designs")
     .select(
-      "id, created_at, product_title, product_slug, length_mm, width_mm, preview_url, fabric_json"
+      "id, created_at, product_title, product_slug, length_mm, width_mm, preview_url, preview_path, fabric_json"
     )
     .eq("customer_id", customerId)
     .order("created_at", { ascending: false })
@@ -51,12 +54,23 @@ export interface RecentUpload {
   createdAt: string | null;
 }
 
+export interface FetchUploadsResult {
+  uploads: RecentUpload[];
+  /** Human-readable reason the fetch returned an empty list, when applicable. */
+  error: string | null;
+}
+
 export async function fetchRecentUploads(
   customerId: string | null,
   limit = 60
-): Promise<RecentUpload[]> {
+): Promise<FetchUploadsResult> {
   const supabase = getSupabase();
-  if (!supabase || !customerId) return [];
+  if (!supabase) {
+    return { uploads: [], error: "Supabase isn't configured." };
+  }
+  if (!customerId) {
+    return { uploads: [], error: null };
+  }
   const folder = customerId;
   const { data, error } = await supabase.storage
     .from(ASSETS_BUCKET)
@@ -66,9 +80,18 @@ export async function fetchRecentUploads(
     });
   if (error) {
     console.warn("[recent uploads] list failed:", error);
-    return [];
+    // The most common reason `list()` errors in production: the Storage
+    // bucket has no SELECT/LIST policy for the anon role. Surface a
+    // useful message so the merchant can fix it without digging through
+    // the network tab.
+    const msg =
+      error.message?.toLowerCase().includes("policy") ||
+      error.message?.toLowerCase().includes("permission")
+        ? `Storage list permission missing on bucket "${ASSETS_BUCKET}". Add a SELECT policy for anon in Supabase → Storage → Policies.`
+        : `Couldn't load your uploads: ${error.message ?? "unknown error"}`;
+    return { uploads: [], error: msg };
   }
-  return (data ?? [])
+  const uploads = (data ?? [])
     .filter((f) => f.name && !f.name.startsWith("."))
     .map((f) => {
       const path = `${folder}/${f.name}`;
@@ -82,6 +105,7 @@ export async function fetchRecentUploads(
         createdAt: (f as any).created_at ?? null,
       };
     });
+  return { uploads, error: null };
 }
 
 export async function uploadAsset(
@@ -122,6 +146,75 @@ export async function deleteAsset(path: string): Promise<boolean> {
     return false;
   }
   return true;
+}
+
+export interface DeleteDesignResult {
+  ok: boolean;
+  /** Human-readable reason on failure. */
+  error: string | null;
+}
+
+/**
+ * Permanently delete a saved design from `user_designs` AND its preview
+ * PNG from `design-previews` storage. Used by the "Recent designs"
+ * gallery's per-card trash button.
+ *
+ * IMPORTANT: Postgres+RLS will silently no-op a `delete()` when the row
+ * exists but the policy denies it — the call returns `error: null` but
+ * doesn't remove anything. To detect this we chain `.select()` so the
+ * call returns the deleted rows; an empty array means RLS blocked it.
+ *
+ * The preview-image cleanup is best-effort: if storage removal fails
+ * (e.g. the row was created before previews started uploading, or the
+ * storage policy is missing) we still report success because the
+ * customer-visible record is gone.
+ */
+export async function deleteDesign(
+  designId: string,
+  previewPath?: string | null
+): Promise<DeleteDesignResult> {
+  const supabase = getSupabase();
+  if (!supabase) {
+    return { ok: false, error: "Supabase isn't configured." };
+  }
+
+  // 1. Delete the row AND ask Supabase to return what it deleted, so an
+  //    RLS-blocked delete is detectable.
+  const { data, error: rowErr } = await supabase
+    .from("user_designs")
+    .delete()
+    .eq("id", designId)
+    .select("id");
+
+  if (rowErr) {
+    console.warn("[delete design] row removal failed:", rowErr);
+    return {
+      ok: false,
+      error: `Couldn't delete: ${rowErr.message ?? "unknown error"}`,
+    };
+  }
+  if (!data || data.length === 0) {
+    // Most common cause in practice: no DELETE policy on the table.
+    const msg =
+      "Couldn't delete that design. Add a DELETE policy on `user_designs` " +
+      "for the anon role in Supabase → Authentication → Policies.";
+    console.warn("[delete design] " + msg);
+    return { ok: false, error: msg };
+  }
+
+  // 2. Best-effort preview cleanup.
+  if (previewPath) {
+    const { error: imgErr } = await supabase.storage
+      .from(SUPABASE_DESIGNS_BUCKET)
+      .remove([previewPath]);
+    if (imgErr) {
+      console.warn(
+        "[delete design] preview cleanup failed (non-fatal):",
+        imgErr
+      );
+    }
+  }
+  return { ok: true, error: null };
 }
 
 /**

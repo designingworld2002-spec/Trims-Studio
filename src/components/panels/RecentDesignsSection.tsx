@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
-import { fetchRecentDesigns, type RecentDesign } from "@/lib/supabaseQueries";
+import {
+  deleteDesign,
+  fetchRecentDesigns,
+  type RecentDesign,
+} from "@/lib/supabaseQueries";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { designOps } from "../Workspace";
 
@@ -53,6 +58,42 @@ export function RecentDesignsSection() {
     setRecentDesignLoaded(true);
   };
 
+  /**
+   * Permanently delete a saved design row + its preview PNG.
+   *
+   * UX: optimistic update — we drop the tile from the local list FIRST
+   * (so the gallery feels instant), then call the server. If the server
+   * call fails we revert by re-fetching the canonical list and surface
+   * a small toast-style error.
+   */
+  const onDelete = async (
+    e: React.MouseEvent,
+    d: RecentDesign
+  ): Promise<void> => {
+    // Don't let the click bubble to the parent <button> that loads the
+    // design — the user wanted to delete, not load.
+    e.preventDefault();
+    e.stopPropagation();
+    if (
+      !window.confirm(
+        `Delete "${d.product_title ?? "this design"}" permanently? This can't be undone.`
+      )
+    ) {
+      return;
+    }
+    const snapshot = items;
+    setItems((prev) => (prev ? prev.filter((x) => x.id !== d.id) : prev));
+    const result = await deleteDesign(d.id, d.preview_path ?? undefined);
+    if (!result.ok) {
+      // Restore the optimistic removal so the UI matches the server.
+      setItems(snapshot);
+      window.alert(
+        result.error ??
+          "Couldn't delete that design. Please try again."
+      );
+    }
+  };
+
   return (
     <div className="space-y-2 pt-4 border-t border-vp-border">
       <div className="flex items-center justify-between">
@@ -72,25 +113,39 @@ export function RecentDesignsSection() {
       ) : (
         <div className="grid grid-cols-2 gap-2">
           {items.map((d) => (
-            <button
+            <div
               key={d.id}
-              onClick={() => onPick(d)}
-              title={`${d.product_title ?? "Design"} · ${d.length_mm}×${d.width_mm} mm`}
-              className="aspect-[16/10] rounded border border-vp-border overflow-hidden bg-vp-rail hover:border-vp-blue text-left flex flex-col"
+              className="group relative aspect-[16/10] rounded border border-vp-border overflow-hidden bg-vp-rail hover:border-vp-blue"
             >
-              {d.preview_url ? (
-                <img
-                  src={d.preview_url}
-                  alt=""
-                  className="w-full h-full object-contain bg-white"
-                  loading="lazy"
-                />
-              ) : (
-                <div className="flex-1 flex items-center justify-center text-[10px] text-vp-muted">
-                  no preview
-                </div>
-              )}
-            </button>
+              <button
+                type="button"
+                onClick={() => onPick(d)}
+                title={`${d.product_title ?? "Design"} · ${d.length_mm}×${d.width_mm} mm`}
+                className="absolute inset-0 w-full h-full text-left flex flex-col"
+              >
+                {d.preview_url ? (
+                  <img
+                    src={d.preview_url}
+                    alt=""
+                    className="w-full h-full object-contain bg-white"
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="flex-1 flex items-center justify-center text-[10px] text-vp-muted">
+                    no preview
+                  </div>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={(e) => onDelete(e, d)}
+                aria-label="Delete design"
+                title="Delete permanently"
+                className="absolute top-1 right-1 w-6 h-6 rounded-full bg-white/90 border border-vp-border text-red-600 hover:bg-red-50 hover:border-red-300 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-10"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
           ))}
         </div>
       )}

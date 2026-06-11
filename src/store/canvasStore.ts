@@ -1,6 +1,89 @@
 import { create } from "zustand";
 import type { fabric } from "fabric";
 import type { StudioMode } from "@/lib/urlParams";
+import { history } from "@/lib/historyAccessor";
+import {
+  getProductConfig,
+  type ProductConfig,
+} from "@/config/productConfig";
+
+/**
+ * User-selectable silhouette for the active product. Replaces the old
+ * static `productConfig.canvasClipShape` for the bleed/safety geometry.
+ * The product config still seeds the default — but it's no longer the
+ * single source of truth.
+ */
+export type CanvasShape =
+  | "rectangle"
+  | "round-corners"
+  | "cut-corners"
+  | "oval"
+  | "star";
+
+export interface ShapeModifiers {
+  /** Round-corners: corner radius in mm. */
+  cornerRadiusMm: number;
+  /** Cut-corners: chamfer length in mm (depth of the diagonal cut). */
+  slantLengthMm: number;
+  /** Star: number of points (5+). */
+  starPoints: number;
+  /**
+   * Which corners receive the round / chamfer treatment. `'top'` matches
+   * the standard luggage-tag profile (TL + TR only, bottom stays square).
+   * `'all'` rounds/cuts every corner.
+   */
+  cornersMode: "top" | "all";
+}
+
+export const DEFAULT_SHAPE_MODIFIERS: ShapeModifiers = {
+  cornerRadiusMm: 4,
+  slantLengthMm: 12,
+  starPoints: 5,
+  cornersMode: "top",
+};
+
+/**
+ * Per-side persistence payload. Bundles every store field that lives
+ * OUTSIDE the fabric JSON so a Front ↔ Back switch (or an undo) can
+ * faithfully restore the exact look the side had at snapshot time.
+ *
+ *  - `fabric`          → raw `canvas.toJSON([...])` payload
+ *  - `backgroundColor` → bleed/templateBg fill (excludeFromExport)
+ *  - `tagOrientation`  → vertical / horizontal hole-edge state
+ *  - `lengthMm / widthMm` → bleed dims at snapshot time (sides may
+ *    legitimately have different aspect ratios when the user rotates
+ *    the front but not yet the back)
+ */
+export interface SideSnapshot {
+  fabric: any;
+  backgroundColor: string;
+  tagOrientation: "vertical" | "horizontal";
+  lengthMm: number;
+  widthMm: number;
+}
+
+function clamp01(v: number): number {
+  if (!Number.isFinite(v)) return 0;
+  if (v < 0) return 0;
+  if (v > 1) return 1;
+  return v;
+}
+
+/** Translate the legacy productConfig `canvasClipShape` into a CanvasShape. */
+export function shapeFromProductConfig(c: ProductConfig): CanvasShape {
+  switch (c.canvasClipShape) {
+    case "cut-corners":
+      return "cut-corners";
+    case "circle":
+      return "oval";
+    case "arch":
+      // Arch isn't user-selectable; fall back to round-corners for now.
+      return "round-corners";
+    case "rectangle":
+    default:
+      return "rectangle";
+  }
+}
 
 /**
  * Tool rail identifiers — drives which side panel is open.
@@ -116,6 +199,27 @@ export interface CanvasStoreState {
   updateLength: (lengthMm: number) => void;
   updateWidth: (widthMm: number) => void;
 
+  /**
+   * Swap the active length and width — flips between landscape and
+   * portrait orientation in one click. The dim-change effect in
+   * Workspace will rescale user objects accordingly. Snapshots history.
+   */
+  toggleOrientation: () => void;
+
+  /**
+   * Physical tag orientation — drives which edge carries the hole punch
+   * and the shape modifications (cuts / arcs).
+   *
+   *  - `vertical`   → hole on the TOP edge (default luggage tag)
+   *  - `horizontal` → hole on the RIGHT edge (rotated 90°)
+   *
+   * Toggled together with the L/W swap by `toggleOrientation`. User
+   * objects keep their angle (text stays upright), only their X/Y are
+   * clamped to the new bleed bounds.
+   */
+  tagOrientation: "vertical" | "horizontal";
+  setTagOrientation: (o: "vertical" | "horizontal") => void;
+
   /** Product display title (from URL `product_title=` or fallback). */
   productTitle: string;
   setProductTitle: (t: string) => void;
@@ -123,6 +227,14 @@ export interface CanvasStoreState {
   /** Stable product slug from `product=` (e.g. `woven-labels`). */
   productSlug: string | null;
   setProductSlug: (s: string | null) => void;
+
+  /**
+   * Active product configuration (tools, default dims, visual guides,
+   * clip shape). Drives the canvas engine + sidebar so the Studio
+   * adapts per product without hard-coded assumptions.
+   */
+  productConfig: ProductConfig;
+  setProductConfig: (c: ProductConfig) => void;
 
   /** Shopify customer.id when the storefront passes it. `null` = anonymous. */
   customerId: string | null;
@@ -183,6 +295,16 @@ export interface CanvasStoreState {
   uploadModalOpen: boolean;
   setUploadModalOpen: (b: boolean) => void;
 
+  /**
+   * Internal flag set by `designOps.loadJson` so the dim-change effect
+   * SKIPS its auto-rescale on the next dimension change. Loaded designs
+   * carry positions that are already valid for the target bleed; running
+   * the dim-effect's per-axis scale on top of them double-shrinks. The
+   * flag is consumed (set back to false) after a single dim change.
+   */
+  _skipNextDimRescale: boolean;
+  _setSkipNextDimRescale: (b: boolean) => void;
+
   // ---- selection state ----
   selected: SelectedItemState | null;
   /**
@@ -203,9 +325,74 @@ export interface CanvasStoreState {
   canRedo: boolean;
   setHistoryFlags: (canUndo: boolean, canRedo: boolean) => void;
 
+  // ---- dynamic canvas shape (Hangtag silhouettes etc.) ----
+  /**
+   * Active product silhouette. Dynamic now — user can switch from the
+   * Product panel at any time. Defaults are seeded from
+   * `productConfig.canvasClipShape` on product load but no longer baked in.
+   */
+  canvasShape: CanvasShape;
+  setCanvasShape: (s: CanvasShape) => void;
+  /**
+   * Per-shape physical measurements (mm). Decoupled from the shape itself
+   * so flipping between modes preserves the previous slider value.
+   */
+  shapeModifiers: ShapeModifiers;
+  updateShapeModifiers: (patch: Partial<ShapeModifiers>) => void;
+
   // ---- preview ----
   previewOpen: boolean;
   setPreviewOpen: (b: boolean) => void;
+
+  /**
+   * Preview MODE — distinct from `previewOpen` (the modal). When `true`,
+   * the workspace hides editing guides, locks all objects, and overlays
+   * a material texture on the canvas wrapper so the design reads as
+   * physically woven / printed.
+   */
+  previewMode: boolean;
+  setPreviewMode: (b: boolean) => void;
+
+  /**
+   * Full-screen 3D flip preview modal. Shows snapshots of the front /
+   * back designs with the texture overlay applied; user flips between
+   * them with a `rotateY(180deg)` CSS animation.
+   */
+  previewFlipOpen: boolean;
+  setPreviewFlipOpen: (b: boolean) => void;
+
+  // ---- multi-sided designs (front / back) ----
+  /** Which face the canvas is currently editing. */
+  activeSide: "front" | "back";
+  /** Snapshot of the front-side fabric canvas + paint state. */
+  frontDesign: SideSnapshot | null;
+  /** Snapshot of the back-side fabric canvas + paint state. */
+  backDesign: SideSnapshot | null;
+  /**
+   * Switch to the opposite side. Implementation:
+   *   1. Serialize the current canvas to JSON and stash it under the
+   *      current side's slot (frontDesign / backDesign).
+   *   2. Flip `activeSide`.
+   *   3. Load the target side's JSON into the canvas (or clear all
+   *      user content if no snapshot exists yet).
+   */
+  setActiveSide: (side: "front" | "back") => void;
+
+  /** Whether the "Change the back" chooser modal is open. */
+  backChooserOpen: boolean;
+  setBackChooserOpen: (b: boolean) => void;
+  /**
+   * Build the back-side design from one of three starting points and
+   * switch the canvas to the back side. Used by the "Change the back"
+   * modal.
+   *   - 'duplicate' → copy front JSON to back, then switch
+   *   - 'blank'     → switch to back with an empty canvas
+   *   - 'upload'    → switch to back blank + open the upload modal
+   */
+  initBackDesign: (kind: "duplicate" | "blank" | "upload") => void;
+  /** Direct setters (used by save-design loaders that hydrate both sides). */
+  setFrontDesign: (snap: SideSnapshot | null) => void;
+  setBackDesign: (snap: SideSnapshot | null) => void;
 }
 
 /**
@@ -337,11 +524,108 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
     }
   },
 
+  toggleOrientation: () => {
+    const s = get();
+    const oldLengthMm = s.canvasLengthMm;
+    const oldWidthMm = s.canvasWidthMm;
+    const newLengthMm = oldWidthMm;
+    const newWidthMm = oldLengthMm;
+    const canvas = s.canvas;
+
+    // The Workspace dim-change effect listens to canvasLengthMm /
+    // canvasWidthMm and PER-AXIS rescales every object (scaleX *= newL/oldL,
+    // scaleY *= newW/oldW). On an orientation swap that's a 1.8× stretch
+    // on one axis and a 0.55× squish on the other — exactly the warping
+    // the user reported. Set _skipNextDimRescale BEFORE we flip the
+    // dimensions so the auto-rescale never runs for this dim change.
+    if (canvas) {
+      s._setSkipNextDimRescale(true);
+    }
+
+    set({
+      canvasLengthMm: newLengthMm,
+      canvasWidthMm: newWidthMm,
+      // Aspect ratio inverts with the swap.
+      aspectRatio: s.aspectRatio > 0 ? 1 / s.aspectRatio : 1,
+      // The PHYSICAL tag rotates 90° — hole + cuts move to the right
+      // edge in horizontal mode, back to the top in vertical mode.
+      tagOrientation:
+        s.tagOrientation === "vertical" ? "horizontal" : "vertical",
+    });
+
+    // Relative re-centering: each object's CENTRE keeps its
+    // proportional position inside the bleed (e.g. 40 % across,
+    // 50 % down stays 40 % across, 50 % down after the swap). No
+    // scaleX / scaleY mutation → no stretching. No `angle` mutation →
+    // text stays upright. The mapping uses each object's own bounding
+    // rect centre so groups, text and images all behave identically.
+    if (canvas) {
+      const VIRTUAL = 2000;
+      const MM_PX = 10;
+      const vcx = VIRTUAL / 2;
+      const vcy = VIRTUAL / 2;
+      const oldBleedW = oldLengthMm * MM_PX;
+      const oldBleedH = oldWidthMm * MM_PX;
+      const newBleedW = newLengthMm * MM_PX;
+      const newBleedH = newWidthMm * MM_PX;
+      const oldLeft = vcx - oldBleedW / 2;
+      const oldTop = vcy - oldBleedH / 2;
+      const newLeft = vcx - newBleedW / 2;
+      const newTop = vcy - newBleedH / 2;
+
+      const hist = history.isPaused();
+      if (!hist) history.pause();
+
+      canvas.getObjects().forEach((o: any) => {
+        if (o.excludeFromExport) return;
+        const br = o.getBoundingRect(true, true);
+        const oldCx = br.left + br.width / 2;
+        const oldCy = br.top + br.height / 2;
+        // Relative position of object centre (0..1) inside the OLD bleed.
+        // Clamp to [0,1] so objects sitting past the old edge map to the
+        // nearest in-bounds position instead of overflowing the new bleed.
+        const relX = clamp01((oldCx - oldLeft) / Math.max(1, oldBleedW));
+        const relY = clamp01((oldCy - oldTop) / Math.max(1, oldBleedH));
+        // Same relative position inside the NEW bleed.
+        const newCx = newLeft + relX * newBleedW;
+        const newCy = newTop + relY * newBleedH;
+        // Translate by the centre delta (preserves scale + angle).
+        const dx = newCx - oldCx;
+        const dy = newCy - oldCy;
+        if (dx !== 0 || dy !== 0) {
+          o.left = (o.left ?? 0) + dx;
+          o.top = (o.top ?? 0) + dy;
+          o.setCoords();
+        }
+      });
+      canvas.requestRenderAll();
+      if (!hist) history.resume(false);
+    }
+
+    if (!history.isPaused()) {
+      queueMicrotask(() => history.commit());
+    }
+  },
+
   productTitle: "Standard Visiting Cards",
   setProductTitle: (t) => set({ productTitle: t }),
 
   productSlug: null,
   setProductSlug: (s) => set({ productSlug: s }),
+
+  productConfig: getProductConfig(null),
+  setProductConfig: (c) => {
+    const seeded = shapeFromProductConfig(c);
+    // Clamp the seed against the new product's allowedShapes so we never
+    // land in an illegal state (e.g. carrying "star" into woven labels).
+    const next = c.allowedShapes.includes(seeded)
+      ? seeded
+      : c.allowedShapes[0] ?? "rectangle";
+    set({
+      productConfig: c,
+      canvasShape: next as CanvasShape,
+    });
+  },
 
   customerId: null,
   setCustomerId: (id) => set({ customerId: id }),
@@ -409,9 +693,13 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   uploadModalOpen: false,
   setUploadModalOpen: (b) => set({ uploadModalOpen: b }),
 
+  _skipNextDimRescale: false,
+  _setSkipNextDimRescale: (b) => set({ _skipNextDimRescale: b }),
+
   backgroundColor: "#ffffff",
   setBackgroundColor: (c) => {
     const canvas = get().canvas;
+    const prev = get().backgroundColor;
     set({ backgroundColor: c });
     if (!canvas) return;
     // Always update the bleed rect so the colour is correct underneath
@@ -432,6 +720,13 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       tplBg.set("fill", c);
     }
     canvas.requestRenderAll();
+    // Bleed + templateBg are `excludeFromExport`, so fabric's events
+    // won't trigger an undo snapshot for these mutations. Commit one
+    // manually — but only on real changes (skip if the colour didn't
+    // actually change, e.g. the picker fires an extra event on blur).
+    if (prev !== c && !history.isPaused()) {
+      history.commit();
+    }
   },
 
   selected: null,
@@ -603,8 +898,216 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   canRedo: false,
   setHistoryFlags: (canUndo, canRedo) => set({ canUndo, canRedo }),
 
+  // ---- canvas shape (dynamic Hangtag silhouette) ----
+  canvasShape: shapeFromProductConfig(getProductConfig(null)),
+  setCanvasShape: (s) => {
+    const cur = get();
+    if (cur.canvasShape === s) return;
+    // Reject illegal shape for this product (e.g. star on woven labels).
+    if (!cur.productConfig.allowedShapes.includes(s)) return;
+    set({ canvasShape: s });
+    // Snapshot the change so it lives in the undo stack alongside other
+    // canvas mutations. Skip when history is paused (during bulk loads).
+    if (!history.isPaused()) {
+      // Defer one tick so React + the Workspace guide-redraw effect both
+      // run before we lock in the snapshot.
+      queueMicrotask(() => history.commit());
+    }
+  },
+  shapeModifiers: DEFAULT_SHAPE_MODIFIERS,
+  updateShapeModifiers: (patch) => {
+    set((s) => ({
+      shapeModifiers: { ...s.shapeModifiers, ...patch },
+    }));
+    if (!history.isPaused()) {
+      queueMicrotask(() => history.commit());
+    }
+  },
+
   previewOpen: false,
   setPreviewOpen: (b) => set({ previewOpen: b }),
+
+  // ---- 3D Flip Preview Modal ------------------------------------------
+  previewFlipOpen: false,
+  setPreviewFlipOpen: (b) => set({ previewFlipOpen: b }),
+
+  // ---- Tag orientation (vertical = hole on top, horizontal = right) ---
+  tagOrientation: "vertical",
+  setTagOrientation: (o) => set({ tagOrientation: o }),
+
+  // ---- Preview MODE (texture overlay on canvas) -----------------------
+  previewMode: false,
+  setPreviewMode: (b) => {
+    const canvas = get().canvas;
+    set({ previewMode: b });
+    if (!canvas) return;
+    // Lock all user objects + hide editing guides so the canvas reads
+    // as a finished, untouchable preview.
+    canvas.getObjects().forEach((o) => {
+      const id = (o as any).id;
+      const isGuide =
+        id === "bleed" || id === "safety" || id === "holePunch";
+      if (isGuide) {
+        // Bleed stays visible (it IS the visible card), but we drop the
+        // sky-blue stroke and dashed safe area while in preview.
+        if (id === "bleed") {
+          if (b) {
+            // Save the original stroke width ONCE when entering preview.
+            if ((o as any)._origStrokeWidth == null) {
+              (o as any)._origStrokeWidth = (o as any).strokeWidth ?? 2;
+            }
+            o.set("strokeWidth", 0);
+          } else {
+            const orig = (o as any)._origStrokeWidth;
+            o.set("strokeWidth", typeof orig === "number" ? orig : 2);
+            (o as any)._origStrokeWidth = undefined;
+          }
+        } else {
+          o.set("visible", !b);
+        }
+        return;
+      }
+      // Lock user objects so they can't be dragged / resized in preview.
+      o.set({
+        selectable: !b,
+        evented: !b,
+        hasControls: !b,
+        hasBorders: !b,
+      } as any);
+    });
+    if (b) canvas.discardActiveObject();
+    canvas.requestRenderAll();
+  },
+
+  // ---- Front / Back state ---------------------------------------------
+  activeSide: "front",
+  frontDesign: null,
+  backDesign: null,
+  backChooserOpen: false,
+  setBackChooserOpen: (b) => set({ backChooserOpen: b }),
+  setFrontDesign: (snap) => set({ frontDesign: snap }),
+  setBackDesign: (snap) => set({ backDesign: snap }),
+  initBackDesign: (kind) => {
+    const s = get();
+    if (s.activeSide === "back") {
+      set({ backChooserOpen: false });
+      return;
+    }
+    if (kind === "duplicate") {
+      // Snapshot the LIVE canvas (fabric + paint + orientation + dims).
+      // Mirror it to the back so the user starts with an exact copy.
+      const snap = snapshotCanvas(s.canvas, s);
+      if (snap) {
+        set({
+          frontDesign: snap,
+          backDesign: snap,
+          backChooserOpen: false,
+        });
+      } else {
+        set({ backChooserOpen: false });
+      }
+      get().setActiveSide("back");
+      return;
+    }
+    if (kind === "upload") {
+      // Start blank + pop the uploads modal so the user can drop a file.
+      set({ backChooserOpen: false, uploadModalOpen: true });
+      get().setActiveSide("back");
+      return;
+    }
+    // "blank" — straightforward switch with no preloaded JSON.
+    set({ backChooserOpen: false });
+    get().setActiveSide("back");
+  },
+  setActiveSide: (side) => {
+    const s = get();
+    if (s.activeSide === side) return;
+    const canvas = s.canvas;
+    if (!canvas) {
+      set({ activeSide: side });
+      return;
+    }
+    // 1) Snapshot the CURRENT side — full state bundle (fabric JSON +
+    //    paint + orientation + dimensions). Stored verbatim so a later
+    //    switch faithfully restores every visual fact about this side.
+    const snap = snapshotCanvas(canvas, s);
+    const prevSide = s.activeSide;
+    if (snap) {
+      set({
+        [prevSide === "front" ? "frontDesign" : "backDesign"]: snap,
+        activeSide: side,
+      } as any);
+    } else {
+      set({ activeSide: side });
+    }
+
+    // 2) Load the TARGET side. If a snapshot exists, restore EVERY
+    //    persisted field: dims + orientation drive the guides; fabric
+    //    + backgroundColor drive the visible art. designOps.loadJson
+    //    reads the bg from the JSON top-level `background` field, so
+    //    we inject it.
+    const targetSnap =
+      side === "front" ? get().frontDesign : get().backDesign;
+    import("@/components/Workspace").then(({ designOps }) => {
+      if (targetSnap) {
+        try {
+          const targetLen = targetSnap.lengthMm || get().canvasLengthMm;
+          const targetWid = targetSnap.widthMm || get().canvasWidthMm;
+          // ATOMIC restore: tagOrientation + dims + skipRescale flag all
+          // set in a single update so the Workspace dim-effect sees a
+          // CONSISTENT target state on its first re-render. If we set
+          // tagOrientation first (separately) the effect fires once with
+          // OLD dims + NEW orientation → guides draw at wrong size →
+          // race with the next dim-update + drawGuides call.
+          set({
+            tagOrientation: targetSnap.tagOrientation,
+            canvasLengthMm: targetLen,
+            canvasWidthMm: targetWid,
+            aspectRatio: targetLen / Math.max(1, targetWid),
+            _skipNextDimRescale: true,
+          });
+          const fabricPayload =
+            typeof targetSnap.fabric === "string"
+              ? JSON.parse(targetSnap.fabric)
+              : { ...(targetSnap.fabric || {}) };
+          fabricPayload.background = targetSnap.backgroundColor;
+          designOps.loadJson(fabricPayload, targetLen, targetWid);
+        } catch (e) {
+          console.warn("[setActiveSide] failed to load target snap:", e);
+          designOps.clearAll();
+        }
+      } else {
+        designOps.clearAll();
+      }
+    });
+  },
 }));
+
+/**
+ * Capture a SideSnapshot from the live fabric canvas + current paint /
+ * orientation / dimensions. Returns `null` if the canvas is missing.
+ */
+function snapshotCanvas(
+  canvas: fabric.Canvas | null,
+  storeState: CanvasStoreState
+): SideSnapshot | null {
+  if (!canvas) return null;
+  const propsToInclude = [
+    "id",
+    "qrUrl",
+    "qrFgColor",
+    "qrBgColor",
+    "excludeFromExport",
+    "selectable",
+    "evented",
+  ];
+  return {
+    fabric: canvas.toJSON(propsToInclude),
+    backgroundColor: storeState.backgroundColor,
+    tagOrientation: storeState.tagOrientation,
+    lengthMm: storeState.canvasLengthMm,
+    widthMm: storeState.canvasWidthMm,
+  };
+}
 
 export const DEFAULT_SELECTED_STATE = DEFAULT_SELECTED;

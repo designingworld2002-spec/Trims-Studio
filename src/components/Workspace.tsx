@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { fabric } from "fabric";
 import { useCanvasStore } from "@/store/canvasStore";
+import type { CanvasShape, ShapeModifiers } from "@/store/canvasStore";
 import { HistoryManager } from "@/lib/history";
+import { _registerHistory, history } from "@/lib/historyAccessor";
 import { Autosave, loadSavedDesign, syncWorkIdToUrl } from "@/lib/autosave";
 import { useSmartGuides } from "@/lib/useSmartGuides";
 import { TopContextualToolbar } from "./TopContextualToolbar";
 import { ObjectActionMenu } from "./ObjectActionMenu";
 import { RevertToTemplate } from "./RevertToTemplate";
+import { SideToggle } from "./SideToggle";
 
 /**
  * Virtual workspace constants.
@@ -27,6 +30,7 @@ export const SAFETY_MM = 2;
 const GUIDE_IDS = {
   bleed: "bleed",
   safety: "safety",
+  holePunch: "holePunch",
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -34,8 +38,8 @@ const GUIDE_IDS = {
 /* ------------------------------------------------------------------ */
 
 interface GuideRects {
-  bleed: fabric.Rect;
-  safety: fabric.Rect;
+  bleed: fabric.Object;
+  safety: fabric.Object;
   bleedLeft: number;
   bleedTop: number;
   bleedW: number;
@@ -44,6 +48,250 @@ interface GuideRects {
   safetyTop: number;
   safetyW: number;
   safetyH: number;
+  /** Silhouette shape this guide set was drawn with. */
+  shape: CanvasShape;
+  /** Tag orientation at draw time — drives which corners are modified. */
+  tagOrientation: "vertical" | "horizontal";
+  /**
+   * Bleed-shape pixel measurements (driven by the active store modifiers).
+   * Used downstream by `buildSafeAreaClip`, the texture overlay, and the
+   * label brackets.
+   */
+  modifiers: ShapeModifiers;
+  /** Convenience: corner radius applied to the BLEED rounded-rect, px. */
+  bleedCornerRadiusPx: number;
+  /** Convenience: chamfer (slant) applied to the BLEED cut-corners, px. */
+  bleedSlantPx: number;
+  /** Same fields but for the SAFETY shape (proportional inset). */
+  safetyCornerRadiusPx: number;
+  safetySlantPx: number;
+}
+
+/** Bleed-vs-safety inset (mm). The safety silhouette mirrors the bleed
+ *  nested exactly SAFETY_MM inward on every edge. */
+const SAFETY_INSET_MM = SAFETY_MM;
+
+/* ------------------------------------------------------------------ */
+/* Shape geometry — pure math, no fabric dependency                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Cut-corner polygon points. `slant` is the chamfer depth measured along
+ * each edge from the corner inward.
+ *
+ * `cornersMode === 'all'` always chamfers all four corners.
+ * `cornersMode === 'top'` chamfers only the two corners adjacent to the
+ * tag's MODIFIED edge — the edge that carries the hole punch. Which
+ * edge that is depends on `tagOrientation`:
+ *   - vertical   → TL + TR (hole on top)
+ *   - horizontal → TR + BR (hole on right)
+ */
+function cutCornerPoints(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  slant: number,
+  cornersMode: "top" | "all",
+  tagOrientation: "vertical" | "horizontal"
+): { x: number; y: number }[] {
+  const c = Math.max(0, Math.min(slant, w * 0.4, h * 0.4));
+  if (cornersMode === "all") {
+    return [
+      { x: left + c, y: top },
+      { x: left + w - c, y: top },
+      { x: left + w, y: top + c },
+      { x: left + w, y: top + h - c },
+      { x: left + w - c, y: top + h },
+      { x: left + c, y: top + h },
+      { x: left, y: top + h - c },
+      { x: left, y: top + c },
+    ];
+  }
+  if (tagOrientation === "horizontal") {
+    // TR + BR chamfered, TL + BL square. 6 vertices.
+    return [
+      { x: left, y: top },
+      { x: left + w - c, y: top },
+      { x: left + w, y: top + c },
+      { x: left + w, y: top + h - c },
+      { x: left + w - c, y: top + h },
+      { x: left, y: top + h },
+    ];
+  }
+  // vertical — TL + TR chamfered, BL + BR square.
+  return [
+    { x: left + c, y: top },
+    { x: left + w - c, y: top },
+    { x: left + w, y: top + c },
+    { x: left + w, y: top + h },
+    { x: left, y: top + h },
+    { x: left, y: top + c },
+  ];
+}
+
+/**
+ * SVG path data for a rectangle with arcs only on the two corners
+ * adjacent to the tag's modified edge.
+ *   - vertical   → TL + TR rounded (BL + BR square)
+ *   - horizontal → TR + BR rounded (TL + BL square)
+ * Coordinates are absolute.
+ */
+function modifiedEdgeRoundedRectPath(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  r: number,
+  tagOrientation: "vertical" | "horizontal"
+): string {
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+  const L = left;
+  const T = top;
+  const R = left + w;
+  const B = top + h;
+  if (tagOrientation === "horizontal") {
+    // TR + BR arcs, left edge square.
+    return [
+      `M ${L} ${T}`,
+      `L ${R - radius} ${T}`,
+      `A ${radius} ${radius} 0 0 1 ${R} ${T + radius}`,
+      `L ${R} ${B - radius}`,
+      `A ${radius} ${radius} 0 0 1 ${R - radius} ${B}`,
+      `L ${L} ${B}`,
+      "Z",
+    ].join(" ");
+  }
+  // vertical — TL + TR arcs, bottom edge square.
+  return [
+    `M ${L + radius} ${T}`,
+    `L ${R - radius} ${T}`,
+    `A ${radius} ${radius} 0 0 1 ${R} ${T + radius}`,
+    `L ${R} ${B}`,
+    `L ${L} ${B}`,
+    `L ${L} ${T + radius}`,
+    `A ${radius} ${radius} 0 0 1 ${L + radius} ${T}`,
+    "Z",
+  ].join(" ");
+}
+
+/**
+ * Star polygon vertices. Alternates between outer and inner radii to build
+ * a `points`-pointed star. Center is the bounding-box centre; radii fit the
+ * bounding box.
+ */
+function starPoints(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  points: number
+): { x: number; y: number }[] {
+  const cx = left + w / 2;
+  const cy = top + h / 2;
+  const outerX = w / 2;
+  const outerY = h / 2;
+  // Inner radius at ~38% of the outer — classic 5-point star proportion.
+  const innerScale = 0.38;
+  const n = Math.max(5, Math.floor(points));
+  const total = n * 2;
+  const out: { x: number; y: number }[] = [];
+  // Start at "12 o'clock" so the first point reads upward.
+  const start = -Math.PI / 2;
+  for (let i = 0; i < total; i++) {
+    const a = start + (i * Math.PI) / n;
+    const rx = i % 2 === 0 ? outerX : outerX * innerScale;
+    const ry = i % 2 === 0 ? outerY : outerY * innerScale;
+    out.push({ x: cx + Math.cos(a) * rx, y: cy + Math.sin(a) * ry });
+  }
+  return out;
+}
+
+/**
+ * Build a guide silhouette (bleed or safety) for the active shape.
+ * Returns a fabric.Object positioned in absolute canvas coordinates.
+ *   - rectangle      → fabric.Rect
+ *   - round-corners  → fabric.Rect with dynamic rx / ry
+ *   - cut-corners    → fabric.Polygon (all four corners chamfered)
+ *   - oval           → fabric.Ellipse fitting the w×h box
+ *   - star           → fabric.Polygon (alternating outer/inner radii)
+ */
+function makeGuideShape(
+  shape: CanvasShape,
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  opts: {
+    cornerRadiusPx: number;
+    slantPx: number;
+    starPoints: number;
+    cornersMode: "top" | "all";
+    tagOrientation: "vertical" | "horizontal";
+  },
+  style: fabric.IObjectOptions
+): fabric.Object {
+  switch (shape) {
+    case "round-corners": {
+      const r = Math.max(0, Math.min(opts.cornerRadiusPx, w / 2, h / 2));
+      if (opts.cornersMode === "top") {
+        // Custom SVG path — only the corners adjacent to the modified
+        // edge are arced. Build with origin (0,0) and position via
+        // left/top so fabric's bbox math lines up with the bleed.
+        const d = modifiedEdgeRoundedRectPath(
+          0,
+          0,
+          w,
+          h,
+          r,
+          opts.tagOrientation
+        );
+        return new fabric.Path(d, {
+          left,
+          top,
+          ...style,
+        });
+      }
+      return new fabric.Rect({
+        left,
+        top,
+        width: w,
+        height: h,
+        rx: r,
+        ry: r,
+        ...style,
+      });
+    }
+    case "cut-corners":
+      return new fabric.Polygon(
+        cutCornerPoints(
+          left,
+          top,
+          w,
+          h,
+          opts.slantPx,
+          opts.cornersMode,
+          opts.tagOrientation
+        ),
+        { ...style }
+      );
+    case "oval":
+      return new fabric.Ellipse({
+        left,
+        top,
+        rx: w / 2,
+        ry: h / 2,
+        ...style,
+      });
+    case "star":
+      return new fabric.Polygon(
+        starPoints(left, top, w, h, opts.starPoints),
+        { ...style }
+      );
+    case "rectangle":
+    default:
+      return new fabric.Rect({ left, top, width: w, height: h, ...style });
+  }
 }
 
 /**
@@ -73,14 +321,17 @@ function drawGuides(
   //   onChange sees no guides → calls drawGuides again → both drawGuides
   //   calls add a pair → 4 guides on canvas.
   // Pausing means the cleanup events don't trigger the recursive callback.
-  const hist = _historyManager;
-  const wasPaused = hist?.isPaused() ?? false;
-  if (hist && !wasPaused) hist.pause();
+  const wasPaused = history.isPaused();
+  if (!wasPaused) history.pause();
 
   // Wipe existing guides (HMR, undo restores, dim changes).
   const stale = canvas.getObjects().filter((o) => {
     const id = (o as any).id;
-    return id === GUIDE_IDS.bleed || id === GUIDE_IDS.safety;
+    return (
+      id === GUIDE_IDS.bleed ||
+      id === GUIDE_IDS.safety ||
+      id === GUIDE_IDS.holePunch
+    );
   });
   if (stale.length > 0) canvas.remove(...stale);
 
@@ -88,8 +339,8 @@ function drawGuides(
   // the store — they are the master size.
   const bleedW = lengthMm * MM_TO_PX;
   const bleedH = widthMm * MM_TO_PX;
-  const safetyW = Math.max(1, bleedW - SAFETY_MM * 2 * MM_TO_PX);
-  const safetyH = Math.max(1, bleedH - SAFETY_MM * 2 * MM_TO_PX);
+  const safetyW = Math.max(1, bleedW - SAFETY_INSET_MM * 2 * MM_TO_PX);
+  const safetyH = Math.max(1, bleedH - SAFETY_INSET_MM * 2 * MM_TO_PX);
 
   const cx = VIRTUAL_SIZE / 2;
   const cy = VIRTUAL_SIZE / 2;
@@ -108,53 +359,144 @@ function drawGuides(
   };
   const baseAny = { excludeFromExport: true } as any;
 
+  // Resolve the active shape + measurement modifiers from the store.
+  // These are dynamic now — the Product panel can flip them at any moment.
+  const store = useCanvasStore.getState();
+  const shape: CanvasShape = store.canvasShape;
+  const modifiers: ShapeModifiers = store.shapeModifiers;
+  const tagOrientation: "vertical" | "horizontal" = store.tagOrientation;
+
+  // The shortest side caps every shape modifier at 40%.
+  const shortEdgeMm = Math.max(1, Math.min(lengthMm, widthMm));
+  const maxModifierMm = shortEdgeMm * 0.4;
+
+  const bleedCornerRadiusMm = Math.max(
+    0,
+    Math.min(modifiers.cornerRadiusMm, maxModifierMm)
+  );
+  const bleedSlantMm = Math.max(
+    0,
+    Math.min(modifiers.slantLengthMm, maxModifierMm)
+  );
+  // Safety shape nests SAFETY_INSET_MM inward → measurement modifiers
+  // shrink by the same inset (clamped to 0).
+  const safetyCornerRadiusMm = Math.max(
+    0,
+    bleedCornerRadiusMm - SAFETY_INSET_MM
+  );
+  const safetySlantMm = Math.max(0, bleedSlantMm - SAFETY_INSET_MM);
+
+  const bleedCornerRadiusPx = bleedCornerRadiusMm * MM_TO_PX;
+  const bleedSlantPx = bleedSlantMm * MM_TO_PX;
+  const safetyCornerRadiusPx = safetyCornerRadiusMm * MM_TO_PX;
+  const safetySlantPx = safetySlantMm * MM_TO_PX;
+
   // 1) Bleed — the visible "card". Filled with the user's bg colour,
-  //    dashed yellow stroke, soft drop shadow.
-  const bleed = new fabric.Rect({
-    left: bleedLeft,
-    top: bleedTop,
-    width: bleedW,
-    height: bleedH,
-    fill: bgFill,
-    stroke: "#eab308",
-    strokeWidth: 2,
-    strokeDashArray: [10, 6],
-    strokeUniform: true,
-    shadow: new fabric.Shadow({
-      color: "rgba(0,0,0,0.12)",
-      blur: 24,
-      offsetX: 0,
-      offsetY: 4,
-    }),
-    ...baseProps,
-  });
+  //    SOLID sky-blue stroke (refined Vistaprint look), soft drop shadow.
+  //    Shape-aware: rectangle / round / cut / oval / star.
+  const bleed = makeGuideShape(
+    shape,
+    bleedLeft,
+    bleedTop,
+    bleedW,
+    bleedH,
+    {
+      cornerRadiusPx: bleedCornerRadiusPx,
+      slantPx: bleedSlantPx,
+      starPoints: modifiers.starPoints,
+      cornersMode: modifiers.cornersMode,
+      tagOrientation,
+    },
+    {
+      fill: bgFill,
+      stroke: "#38bdf8",
+      strokeWidth: 2,
+      strokeUniform: true,
+      shadow: new fabric.Shadow({
+        color: "rgba(0,0,0,0.12)",
+        blur: 24,
+        offsetX: 0,
+        offsetY: 4,
+      }),
+      ...baseProps,
+    }
+  );
   (bleed as any).id = GUIDE_IDS.bleed;
   Object.assign(bleed, baseAny);
 
-  // 2) Safety — dashed green inside the bleed.
-  const safety = new fabric.Rect({
-    left: safetyLeft,
-    top: safetyTop,
-    width: safetyW,
-    height: safetyH,
-    fill: "transparent",
-    stroke: "#22c55e",
-    strokeWidth: 2,
-    strokeDashArray: [8, 5],
-    strokeUniform: true,
-    ...baseProps,
-  });
+  // 2) Safety — dashed green nested inside the bleed.
+  const safety = makeGuideShape(
+    shape,
+    safetyLeft,
+    safetyTop,
+    safetyW,
+    safetyH,
+    {
+      cornerRadiusPx: safetyCornerRadiusPx,
+      slantPx: safetySlantPx,
+      starPoints: modifiers.starPoints,
+      cornersMode: modifiers.cornersMode,
+      tagOrientation,
+    },
+    {
+      fill: "transparent",
+      stroke: "#22c55e",
+      strokeWidth: 2,
+      strokeDashArray: [8, 5],
+      strokeUniform: true,
+      ...baseProps,
+    }
+  );
   (safety as any).id = GUIDE_IDS.safety;
   Object.assign(safety, baseAny);
 
   canvas.add(bleed, safety);
   canvas.sendToBack(safety);
   canvas.sendToBack(bleed);
+
+  // 3) Hole punch — product-driven protective overlay (e.g. hang tags).
+  //    Centred horizontally, offset down from the bleed's TOP edge,
+  //    dashed red ring with transparent fill. Strictly locked + excluded
+  //    from export so it never lands in the saved JSON or the print PNG.
+  //    Kept at the front so it's always a visible "don't place here" cue.
+  const { visualGuides } = useCanvasStore.getState().productConfig;
+  if (visualGuides.hasHolePunch && visualGuides.holePunchRadiusMm > 0) {
+    const holeR = visualGuides.holePunchRadiusMm * MM_TO_PX;
+    const holeOffsetPx = visualGuides.holePunchOffsetFromTopMm * MM_TO_PX;
+    // Orientation-aware placement: vertical tags hang from the TOP edge,
+    // horizontal tags hang from the RIGHT edge. The hole sits the same
+    // offset inward from the hanging edge, and is centred across the
+    // perpendicular axis.
+    const holeCenterX =
+      tagOrientation === "horizontal"
+        ? bleedLeft + bleedW - holeOffsetPx
+        : cx;
+    const holeCenterY =
+      tagOrientation === "horizontal" ? cy : bleedTop + holeOffsetPx;
+    const hole = new fabric.Circle({
+      radius: holeR,
+      left: holeCenterX,
+      top: holeCenterY,
+      originX: "center",
+      originY: "center",
+      fill: "transparent",
+      stroke: "#ef4444",
+      strokeWidth: 2,
+      strokeDashArray: [6, 4],
+      strokeUniform: true,
+      ...baseProps,
+    });
+    (hole as any).id = GUIDE_IDS.holePunch;
+    Object.assign(hole, baseAny);
+    canvas.add(hole);
+    canvas.bringToFront(hole);
+  }
+
   canvas.requestRenderAll();
 
   // Restore history if WE paused it (don't unpause if our caller had it
   // already paused for its own bulk operation, e.g. loadFromJSON).
-  if (hist && !wasPaused) hist.resume(false);
+  if (!wasPaused) history.resume(false);
 
   return {
     bleed,
@@ -167,6 +509,13 @@ function drawGuides(
     safetyTop,
     safetyW,
     safetyH,
+    shape,
+    tagOrientation,
+    modifiers,
+    bleedCornerRadiusPx,
+    bleedSlantPx,
+    safetyCornerRadiusPx,
+    safetySlantPx,
   };
 }
 
@@ -175,18 +524,89 @@ function drawGuides(
 /* ------------------------------------------------------------------ */
 
 /**
- * Build an `absolutePositioned` Rect that fabric will use as a clipPath
- * on user objects. Positioned in canvas coordinates (NOT object-relative)
- * so it stays put even when the wrapped object moves.
+ * Build an `absolutePositioned` clipPath matching the SAFETY silhouette so
+ * content is masked to the real tag shape (a cut-corner tag clips off the
+ * top corners; a circle tag clips to the ellipse). Positioned in canvas
+ * coordinates so it stays put even when the wrapped object moves.
  */
-function buildSafeAreaClip(g: GuideRects): fabric.Rect {
-  return new fabric.Rect({
-    left: g.safetyLeft,
-    top: g.safetyTop,
-    width: g.safetyW,
-    height: g.safetyH,
+function buildSafeAreaClip(g: GuideRects): fabric.Object {
+  const opts: fabric.IObjectOptions & Record<string, any> = {
     absolutePositioned: true,
-  });
+  };
+  const cornersMode = g.modifiers.cornersMode;
+  switch (g.shape) {
+    case "round-corners": {
+      const r = Math.max(
+        0,
+        Math.min(g.safetyCornerRadiusPx, g.safetyW / 2, g.safetyH / 2)
+      );
+      if (cornersMode === "top") {
+        const d = modifiedEdgeRoundedRectPath(
+          0,
+          0,
+          g.safetyW,
+          g.safetyH,
+          r,
+          g.tagOrientation
+        );
+        return new fabric.Path(d, {
+          left: g.safetyLeft,
+          top: g.safetyTop,
+          ...opts,
+        });
+      }
+      return new fabric.Rect({
+        left: g.safetyLeft,
+        top: g.safetyTop,
+        width: g.safetyW,
+        height: g.safetyH,
+        rx: r,
+        ry: r,
+        ...opts,
+      });
+    }
+    case "cut-corners":
+      return new fabric.Polygon(
+        cutCornerPoints(
+          g.safetyLeft,
+          g.safetyTop,
+          g.safetyW,
+          g.safetyH,
+          g.safetySlantPx,
+          cornersMode,
+          g.tagOrientation
+        ),
+        opts
+      );
+    case "oval":
+      return new fabric.Ellipse({
+        left: g.safetyLeft,
+        top: g.safetyTop,
+        rx: g.safetyW / 2,
+        ry: g.safetyH / 2,
+        ...opts,
+      });
+    case "star":
+      return new fabric.Polygon(
+        starPoints(
+          g.safetyLeft,
+          g.safetyTop,
+          g.safetyW,
+          g.safetyH,
+          g.modifiers.starPoints
+        ),
+        opts
+      );
+    case "rectangle":
+    default:
+      return new fabric.Rect({
+        left: g.safetyLeft,
+        top: g.safetyTop,
+        width: g.safetyW,
+        height: g.safetyH,
+        ...opts,
+      });
+  }
 }
 
 /**
@@ -399,6 +819,11 @@ export function Workspace() {
   const backgroundColor = useCanvasStore((s) => s.backgroundColor);
   const zoom = useCanvasStore((s) => s.zoom);
   const setHistoryFlags = useCanvasStore((s) => s.setHistoryFlags);
+  const previewMode = useCanvasStore((s) => s.previewMode);
+  const productConfig = useCanvasStore((s) => s.productConfig);
+  const canvasShape = useCanvasStore((s) => s.canvasShape);
+  const shapeModifiers = useCanvasStore((s) => s.shapeModifiers);
+  const tagOrientation = useCanvasStore((s) => s.tagOrientation);
 
   // Smart alignment guides (snap-to-edge / snap-to-centre while dragging).
   // Reads `canvas` from the store so it activates as soon as the canvas
@@ -467,12 +892,19 @@ export function Workspace() {
       if (!target || (target as any).excludeFromExport) return;
       const g = guidesRef.current;
       if (g) target.clipPath = buildSafeAreaClip(g);
+      // Keep the protective hole-punch ring above newly-added user
+      // content so it always reads as a "don't place here" warning.
+      const hole = canvas
+        .getObjects()
+        .find((o) => (o as any).id === GUIDE_IDS.holePunch);
+      if (hole) canvas.bringToFront(hole);
     });
 
     setCanvas(canvas);
     if (import.meta.env.DEV) {
       (window as any).__trimsCanvas = canvas;
       (window as any).__trimsStore = useCanvasStore;
+      (window as any).__trimsHistory = history;
     }
 
     // Wire history.
@@ -481,7 +913,41 @@ export function Workspace() {
     // an initial snapshot synchronously inside the constructor, which would
     // hit a Temporal Dead Zone if we read `hist` from the closure before the
     // assignment completes.
-    const hist = new HistoryManager(canvas, (mgr) => {
+    const hist = new HistoryManager({
+      canvas,
+      virtualSize: VIRTUAL_SIZE,
+      store: {
+        getDims: () => {
+          const s = useCanvasStore.getState();
+          return { lengthMm: s.canvasLengthMm, widthMm: s.canvasWidthMm };
+        },
+        getBackgroundColor: () =>
+          useCanvasStore.getState().backgroundColor,
+        setDimsForRestore: (lengthMm, widthMm) => {
+          // We're applying a snapshot — object positions in the snapshot
+          // are ALREADY valid for these dims. Suppress the dim-effect's
+          // auto-rescale so it doesn't apply a redundant scale on top.
+          const s = useCanvasStore.getState();
+          s._setSkipNextDimRescale(true);
+          s.setCanvasSize(lengthMm, widthMm);
+        },
+        setBackgroundColorForRestore: (c) => {
+          // Use setState directly so we don't recurse into `commit()`.
+          useCanvasStore.setState({ backgroundColor: c });
+          // Also propagate the colour to the bleed/templateBg rects on
+          // the canvas. setBackgroundColor would commit() a snapshot
+          // and we don't want that mid-restore.
+          const bleed = canvas
+            .getObjects()
+            .find((o) => (o as any).id === "bleed");
+          if (bleed) bleed.set("fill", c);
+          const tplBg = canvas
+            .getObjects()
+            .find((o) => (o as any).id === "templateBg");
+          if (tplBg) tplBg.set("fill", c);
+        },
+      },
+      onChange: (mgr) => {
       setHistoryFlags(mgr.canUndo(), mgr.canRedo());
       // After an undo/redo, `loadFromJSON` clears every object — including
       // our guides, since they're flagged `excludeFromExport` and therefore
@@ -503,6 +969,7 @@ export function Workspace() {
         applySafeAreaClipToAllObjects(canvas, guidesRef.current);
         mgr.resume(false);
       }
+      },
     });
     historyRef.current = hist;
     _registerHistory(hist);
@@ -535,7 +1002,30 @@ export function Workspace() {
       loadJson: (json, lengthMm, widthMm) =>
         new Promise<void>((resolve) => {
           hist.pause();
+
+          // 0) Pre-load cleanup. `canvas.loadFromJSON` calls
+          //    `canvas.clear()` internally so every existing object is
+          //    removed, but we ALSO need to wipe the canvas-level
+          //    background colour and the store's `backgroundColor`. If
+          //    we don't, the previously-set colour bleeds through to
+          //    the next design — the user reported a yellow card
+          //    persisting after switching templates.
+          canvas.setBackgroundColor(
+            "" as any,
+            canvas.renderAll.bind(canvas)
+          );
+          // Also explicitly remove any pre-existing templateBg-tagged
+          // rect (belt-and-suspenders — clear() handles it, but if a
+          // future change introduces an out-of-band path we don't want
+          // a stale background lingering).
+          canvas
+            .getObjects()
+            .filter((o) => (o as any).id === "templateBg")
+            .forEach((o) => canvas.remove(o));
+
           canvas.loadFromJSON(json, () => {
+            // 1) Reset the canvas surface — virtual stage size, transparent
+            //    bg (the bleed rect carries the visible colour), 1:1 vp.
             if (
               canvas.width !== VIRTUAL_SIZE ||
               canvas.height !== VIRTUAL_SIZE
@@ -545,30 +1035,115 @@ export function Workspace() {
                 height: VIRTUAL_SIZE,
               });
             }
+            // 1b) Capture the LOADED design's native background colour
+            //     BEFORE we wipe `canvas.backgroundColor` to transparent.
+            //
+            //     Priority (high → low):
+            //       1) `templateBg` rect's fill (the saved design's
+            //          tagged background layer, if any)
+            //       2) `canvas.backgroundColor` (fabric's loadFromJSON
+            //          restores this from the JSON's top-level
+            //          `background` field)
+            //       3) White, only as a last resort
+            //
+            //     This makes a switched-to template adopt its native
+            //     colour instead of forcing white on every load.
+            const loadedTplBg = canvas
+              .getObjects()
+              .find((o) => (o as any).id === "templateBg");
+            const tplBgFill =
+              loadedTplBg && typeof (loadedTplBg as any).fill === "string"
+                ? ((loadedTplBg as any).fill as string)
+                : null;
+            const canvasJsonBg =
+              typeof canvas.backgroundColor === "string" &&
+              canvas.backgroundColor &&
+              canvas.backgroundColor !== "transparent"
+                ? canvas.backgroundColor
+                : null;
+            const newBgColor = tplBgFill ?? canvasJsonBg ?? "#ffffff";
+
             canvas.backgroundColor = "transparent";
             canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
-            // Honor the saved design's bleed dimensions; the dim-change
-            // effect upstairs will redraw the guides + reapply the safe
-            // clipPath in the next render. We deliberately DON'T draw
-            // guides here ourselves — doing both leaves duplicate guide
-            // rectangles on the canvas.
+            // Apply the resolved colour to the store + propagate to the
+            // bleed rect (which is what the user actually sees).
+            useCanvasStore.setState({ backgroundColor: newBgColor });
+
+            // 2) Fit-to-bounding-box scaling.
+            //
+            // Compute the union bounding box of every loaded user object
+            // (excluding any excludeFromExport guides that snuck in).
+            // Compare against the target bleed area for the new
+            // workspace and uniformly scale + center so the composition
+            // exactly fills the bleed (Math.min preserves aspect → no
+            // overflow, no distortion).
+            const userObjects = canvas
+              .getObjects()
+              .filter((o) => !(o as any).excludeFromExport);
+
+            if (userObjects.length > 0) {
+              let minX = Infinity;
+              let minY = Infinity;
+              let maxX = -Infinity;
+              let maxY = -Infinity;
+              userObjects.forEach((o) => {
+                const r = o.getBoundingRect(true, true);
+                minX = Math.min(minX, r.left);
+                minY = Math.min(minY, r.top);
+                maxX = Math.max(maxX, r.left + r.width);
+                maxY = Math.max(maxY, r.top + r.height);
+              });
+              const oldW = Math.max(1, maxX - minX);
+              const oldH = Math.max(1, maxY - minY);
+              const newW = lengthMm * MM_TO_PX;
+              const newH = widthMm * MM_TO_PX;
+              const scaleFactor = Math.min(newW / oldW, newH / oldH);
+              const oldCenterX = (minX + maxX) / 2;
+              const oldCenterY = (minY + maxY) / 2;
+              const cx = VIRTUAL_SIZE / 2;
+              const cy = VIRTUAL_SIZE / 2;
+
+              userObjects.forEach((o) => {
+                o.scaleX = (o.scaleX ?? 1) * scaleFactor;
+                o.scaleY = (o.scaleY ?? 1) * scaleFactor;
+                o.left = cx + ((o.left ?? 0) - oldCenterX) * scaleFactor;
+                o.top = cy + ((o.top ?? 0) - oldCenterY) * scaleFactor;
+                // setCoords so selection handles + raycasting line up
+                // with the new geometry (without this, click-targets
+                // stay in the pre-scale positions).
+                o.setCoords();
+              });
+            }
+
+            // 3) Push the new dims into the store. We've already done the
+            //    fit-to-bleed math above, so flag the dim-change effect
+            //    to skip its auto-rescale — otherwise it would scale
+            //    on top of our scale and shrink everything.
             const store = useCanvasStore.getState();
             if (
               store.canvasLengthMm === lengthMm &&
               store.canvasWidthMm === widthMm
             ) {
-              // Dims didn't change, the dim-effect won't fire — manually
-              // redraw guides + reapply clips.
+              // Dims unchanged → dim-effect won't fire. Redraw guides
+              // + reapply clips directly. Use `newBgColor` (the loaded
+              // design's actual colour), NOT `store.backgroundColor`
+              // — the store may still hold the previous design's value
+              // because React hasn't flushed our `setState` above yet.
               guidesRef.current = drawGuides(
                 canvas,
                 lengthMm,
                 widthMm,
-                store.backgroundColor
+                newBgColor
               );
               applySafeAreaClipToAllObjects(canvas, guidesRef.current);
             } else {
+              store._setSkipNextDimRescale(true);
               store.setCanvasSize(lengthMm, widthMm);
             }
+
+            // 4) Force a clean render and let history take ONE snapshot
+            //    so this loaded design is the new "fresh" undo baseline.
+            canvas.requestRenderAll();
             hist.resume(true);
             resolve();
           });
@@ -630,7 +1205,18 @@ export function Workspace() {
     const prev = prevDimsRef.current;
     const dimsChanged = prev.length !== lengthMm || prev.width !== widthMm;
 
-    if (dimsChanged && prev.length > 0 && prev.width > 0) {
+    // designOps.loadJson sets `_skipNextDimRescale` because the loaded
+    // objects are already at coordinates valid for the target bleed (it
+    // ran its own fit-to-bleed math). Letting the auto-rescale fire here
+    // would double-shrink them. Consume the flag (set it false) and
+    // skip the rescale on this single pass.
+    const skipRescale = useCanvasStore.getState()._skipNextDimRescale;
+    if (skipRescale) {
+      useCanvasStore.getState()._setSkipNextDimRescale(false);
+    }
+
+    let didProgrammaticChange = false;
+    if (!skipRescale && dimsChanged && prev.length > 0 && prev.width > 0) {
       const scaleX = lengthMm / prev.length;
       const scaleY = widthMm / prev.width;
       const shouldRescale =
@@ -649,6 +1235,7 @@ export function Workspace() {
           o.setCoords();
         });
         hist?.resume(false);
+        didProgrammaticChange = true;
       }
     }
     prevDimsRef.current = { length: lengthMm, width: widthMm };
@@ -657,7 +1244,22 @@ export function Workspace() {
     // Re-apply the safe-area mask to every existing user object — when the
     // safety rect resizes, every clipPath needs to follow.
     applySafeAreaClipToAllObjects(canvas, guidesRef.current);
-  }, [lengthMm, widthMm, backgroundColor]);
+
+    // Commit ONE clean snapshot after the rescale + guide redraw is done,
+    // so the dimension change is undoable. Skipped during loadJson /
+    // history restore (the skip flag is on) since those paths take their
+    // own snapshot at the right moment.
+    if (didProgrammaticChange) {
+      history.commit();
+    }
+  }, [
+    lengthMm,
+    widthMm,
+    backgroundColor,
+    canvasShape,
+    shapeModifiers,
+    tagOrientation,
+  ]);
 
   /* ----- Resume an in-progress design from workId in the URL ----- */
   useEffect(() => {
@@ -830,6 +1432,17 @@ export function Workspace() {
   const totalScale = fitScale * zoom;
   const stagePxSize = VIRTUAL_SIZE * totalScale;
 
+  // "Stable" workspace flag — falls to false on any zoom or
+  // dimension/orientation change, then re-stabilises after a short
+  // debounce. The rotate FAB hides while transitioning so it doesn't
+  // glitch against the moving rulers / bleed.
+  const [isStable, setIsStable] = useState(true);
+  useEffect(() => {
+    setIsStable(false);
+    const t = window.setTimeout(() => setIsStable(true), 380);
+    return () => window.clearTimeout(t);
+  }, [zoom, fitScale, lengthMm, widthMm, tagOrientation]);
+
   return (
     /*
      * Static, premium-feel workspace.
@@ -865,28 +1478,272 @@ export function Workspace() {
           }}
         >
           <canvas ref={canvasElRef} />
+          {/* PREVIEW MODE — material texture clipped EXACTLY to the bleed
+              rectangle. Positioned in virtual canvas coords (since this
+              parent is the VIRTUAL_SIZE stage), so it scales together
+              with the canvas via the parent transform. Shape-aware
+              clip-path keeps the texture inside cut-corners / ovals /
+              round-corners / stars. */}
+          {previewMode && productConfig.textureOverlayCss && (
+            <BleedTextureOverlay
+              lengthMm={lengthMm}
+              widthMm={widthMm}
+              shape={canvasShape}
+              modifiers={shapeModifiers}
+              tagOrientation={tagOrientation}
+              backgroundCss={productConfig.textureOverlayCss}
+              backgroundSize={getTextureSize(productConfig.handle)}
+              blendMode={productConfig.textureOverlayBlendMode}
+              opacity={productConfig.textureOverlayOpacity}
+            />
+          )}
         </div>
 
-        {/* External labels for Bleed + Safe dimensions. */}
-        <CanvasLabels
-          lengthMm={lengthMm}
-          widthMm={widthMm}
-          stagePx={stagePxSize}
-        />
+        {/* External labels for Bleed + Safe dimensions. Hidden in
+            preview mode so the canvas reads as a finished, untouchable
+            preview. */}
+        {!previewMode && (
+          <CanvasLabels
+            lengthMm={lengthMm}
+            widthMm={widthMm}
+            stagePx={stagePxSize}
+            shape={canvasShape}
+            modifiers={shapeModifiers}
+          />
+        )}
 
         {/* Floating per-object actions. */}
-        {actionMenuPos.visible && (
+        {!previewMode && actionMenuPos.visible && (
           <ObjectActionMenu left={actionMenuPos.left} top={actionMenuPos.top} />
+        )}
+
+        {/* Canvas-rotate button (hang-tags only). Sits inside the stage
+            at the ruler intersection so it scales with canvas zoom.
+            Fades out while the workspace is transitioning (zoom or
+            rotation) and fades back in once the layout settles. */}
+        {!previewMode && (
+          <CanvasRotateButton
+            lengthMm={lengthMm}
+            widthMm={widthMm}
+            stagePx={stagePxSize}
+            isStable={isStable}
+          />
         )}
       </div>
 
       {/* Centered top contextual toolbar (anchored to viewport). */}
-      <TopContextualToolbar />
+      {!previewMode && <TopContextualToolbar />}
 
       {/* Pill that appears only when a design has been loaded from the
           Recent Designs picker. */}
       <RevertToTemplate />
+
+      {/* Floating Front / Back side switcher (multi-sided products). */}
+      <SideToggle />
+
+      {/* PREVIEW MODE — floating "Exit preview" pill so the user can
+          always get back to editing. */}
+      {previewMode && <ExitPreviewPill />}
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Preview Mode helpers                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Per-product texture tiling. Smaller cells = denser pattern (woven
+ * thread). Bigger cells = softer organic feel (paper grain).
+ */
+function getTextureSize(handle: string): string {
+  if (handle === "woven-labels") return "3px 3px";
+  if (handle === "hang-tags") return "8px 8px, 12px 12px, 6px 6px, 4px 4px";
+  return "auto";
+}
+
+/**
+ * Preview-mode texture overlay. Positioned in virtual canvas coordinates
+ * exactly over the BLEED rectangle, and clipped via CSS `clip-path` to
+ * the active silhouette so the texture never spills past the product
+ * edge (e.g. into the chamfered corners of a cut-corner tag).
+ */
+function BleedTextureOverlay({
+  lengthMm,
+  widthMm,
+  shape,
+  modifiers,
+  tagOrientation,
+  backgroundCss,
+  backgroundSize,
+  blendMode,
+  opacity,
+}: {
+  lengthMm: number;
+  widthMm: number;
+  shape: CanvasShape;
+  modifiers: ShapeModifiers;
+  tagOrientation: "vertical" | "horizontal";
+  backgroundCss: string;
+  backgroundSize: string;
+  blendMode: "multiply" | "overlay" | "soft-light" | "hard-light";
+  opacity: number;
+}) {
+  const bleedW = lengthMm * MM_TO_PX;
+  const bleedH = widthMm * MM_TO_PX;
+  const left = VIRTUAL_SIZE / 2 - bleedW / 2;
+  const top = VIRTUAL_SIZE / 2 - bleedH / 2;
+
+  const shortEdgeMm = Math.max(1, Math.min(lengthMm, widthMm));
+  const maxModifierMm = shortEdgeMm * 0.4;
+  const radiusMm = Math.max(0, Math.min(modifiers.cornerRadiusMm, maxModifierMm));
+  const slantMm = Math.max(0, Math.min(modifiers.slantLengthMm, maxModifierMm));
+  const radiusPx = radiusMm * MM_TO_PX;
+  const slantPx = slantMm * MM_TO_PX;
+
+  // Build a CSS clip-path matching the bleed silhouette. The path is in
+  // the overlay's local space (origin = top-left of the overlay div), so
+  // every coord runs 0..bleedW / 0..bleedH.
+  let clipPath: string | undefined;
+  let borderRadius: string | undefined;
+  const cornersMode = modifiers.cornersMode;
+  const isHorizontal = tagOrientation === "horizontal";
+  switch (shape) {
+    case "round-corners":
+      if (cornersMode === "top") {
+        // Modified-edge rounded: vertical → top, horizontal → right.
+        borderRadius = isHorizontal
+          ? `0 ${radiusPx}px ${radiusPx}px 0`
+          : `${radiusPx}px ${radiusPx}px 0 0`;
+      } else {
+        borderRadius = `${radiusPx}px`;
+      }
+      break;
+    case "cut-corners": {
+      const c = Math.max(0, Math.min(slantPx, bleedW * 0.4, bleedH * 0.4));
+      if (cornersMode === "all") {
+        clipPath = `polygon(${c}px 0, ${bleedW - c}px 0, ${bleedW}px ${c}px, ${bleedW}px ${bleedH - c}px, ${bleedW - c}px ${bleedH}px, ${c}px ${bleedH}px, 0 ${bleedH - c}px, 0 ${c}px)`;
+      } else if (isHorizontal) {
+        // TR + BR chamfered, left edge square.
+        clipPath = `polygon(0 0, ${bleedW - c}px 0, ${bleedW}px ${c}px, ${bleedW}px ${bleedH - c}px, ${bleedW - c}px ${bleedH}px, 0 ${bleedH}px)`;
+      } else {
+        // TL + TR chamfered, bottom edge square.
+        clipPath = `polygon(${c}px 0, ${bleedW - c}px 0, ${bleedW}px ${c}px, ${bleedW}px ${bleedH}px, 0 ${bleedH}px, 0 ${c}px)`;
+      }
+      break;
+    }
+    case "oval":
+      borderRadius = "50%";
+      break;
+    case "star": {
+      const pts = starPoints(0, 0, bleedW, bleedH, modifiers.starPoints)
+        .map((p) => `${p.x.toFixed(2)}px ${p.y.toFixed(2)}px`)
+        .join(", ");
+      clipPath = `polygon(${pts})`;
+      break;
+    }
+    case "rectangle":
+    default:
+      break;
+  }
+
+  return (
+    <div
+      aria-hidden
+      className="absolute pointer-events-none"
+      style={{
+        left,
+        top,
+        width: bleedW,
+        height: bleedH,
+        overflow: "hidden",
+        background: backgroundCss,
+        backgroundSize,
+        mixBlendMode: blendMode,
+        opacity,
+        clipPath,
+        borderRadius,
+      }}
+    />
+  );
+}
+
+function ExitPreviewPill() {
+  const setPreviewMode = useCanvasStore((s) => s.setPreviewMode);
+  return (
+    <button
+      onClick={() => setPreviewMode(false)}
+      className="absolute top-4 left-1/2 -translate-x-1/2 z-30 h-9 px-4 rounded-full bg-vp-accent text-white text-[12px] font-semibold tracking-wide shadow-vp-pop hover:opacity-90 transition-all"
+    >
+      Exit Preview
+    </button>
+  );
+}
+
+/**
+ * Canvas-rotate button anchored at the bottom-left intersection of the
+ * ruler lines. Placed INSIDE the zoomable stage so it scales naturally
+ * with the canvas. Hang-tags only.
+ *
+ * `lengthMm` / `widthMm` / `stagePx` come from the parent so the corner
+ * position matches CanvasLabels' rulers exactly (RULER_OFFSET = 14px).
+ */
+function CanvasRotateButton({
+  lengthMm,
+  widthMm,
+  stagePx,
+  isStable,
+}: {
+  lengthMm: number;
+  widthMm: number;
+  stagePx: number;
+  isStable: boolean;
+}) {
+  const productHandle = useCanvasStore((s) => s.productConfig.handle);
+  const toggleOrientation = useCanvasStore((s) => s.toggleOrientation);
+  if (productHandle !== "hang-tags") return null;
+
+  const bleedWPx = ((lengthMm * MM_TO_PX) / VIRTUAL_SIZE) * stagePx;
+  const bleedHPx = ((widthMm * MM_TO_PX) / VIRTUAL_SIZE) * stagePx;
+  const cx = stagePx / 2;
+  const cy = stagePx / 2;
+  // Same RULER_OFFSET as CanvasLabels — the button sits exactly where
+  // the horizontal + vertical rulers meet.
+  const RULER_OFFSET = 14;
+  const cornerX = cx - bleedWPx / 2 - RULER_OFFSET;
+  const cornerY = cy + bleedHPx / 2 + RULER_OFFSET;
+
+  return (
+    <button
+      type="button"
+      onClick={() => toggleOrientation()}
+      aria-label="Rotate canvas 90°"
+      title="Rotate canvas 90°"
+      aria-hidden={!isStable}
+      className="absolute z-20 w-9 h-9 rounded-full bg-white border border-black flex items-center justify-center text-black hover:bg-slate-50 active:scale-95"
+      style={{
+        left: cornerX,
+        top: cornerY,
+        transform: "translate(-50%, -50%)",
+        opacity: isStable ? 1 : 0,
+        pointerEvents: isStable ? "auto" : "none",
+        transition: "opacity 220ms ease",
+      }}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <path d="M21 12a9 9 0 1 1-3.51-7.13" />
+        <polyline points="21 4 21 10 15 10" />
+      </svg>
+    </button>
   );
 }
 
@@ -898,80 +1755,138 @@ function CanvasLabels({
   lengthMm,
   widthMm,
   stagePx,
+  shape,
+  modifiers,
 }: {
   lengthMm: number;
   widthMm: number;
   stagePx: number;
+  shape: CanvasShape;
+  modifiers: ShapeModifiers;
 }) {
   // Bleed is the master rectangle; safe is 2mm in on each side.
   const bleedWPx = ((lengthMm * MM_TO_PX) / VIRTUAL_SIZE) * stagePx;
   const bleedHPx = ((widthMm * MM_TO_PX) / VIRTUAL_SIZE) * stagePx;
   const cx = stagePx / 2;
   const cy = stagePx / 2;
-  const safeLength = Math.max(0, lengthMm - SAFETY_MM * 2);
-  const safeWidth = Math.max(0, widthMm - SAFETY_MM * 2);
+
+  // Display dimensions exactly as the store carries them — raw mm values
+  // matching what the user typed in the Product Options panel.
+  const lengthLabel = `${lengthMm} mm`;
+  const widthLabel = `${widthMm} mm`;
+
+  // Ruler offsets — how far OUTSIDE the bleed edge the ruler sits.
+  const RULER_OFFSET = 14; // px from bleed edge to ruler line
+  const TICK = 6; // half-length of the T-shaped end cap, px
+
+  // Active modifier badge — appears alongside Safety / Bleed in a single
+  // flex-wrap row so they NEVER overlap (badges flow to a second line on
+  // very narrow bleeds instead of stacking on top of each other).
+  const shortEdgeMm = Math.max(1, Math.min(lengthMm, widthMm));
+  const maxModifierMm = Math.round(shortEdgeMm * 0.4);
+  let modifierLabel: string | null = null;
+  if (shape === "round-corners") {
+    const v = Math.min(modifiers.cornerRadiusMm, maxModifierMm);
+    modifierLabel = `R: ${v} mm`;
+  } else if (shape === "cut-corners") {
+    const v = Math.min(modifiers.slantLengthMm, maxModifierMm);
+    modifierLabel = `Slant: ${v} mm`;
+  } else if (shape === "star") {
+    modifierLabel = `${modifiers.starPoints} pts`;
+  }
 
   return (
     <>
-      {/* Top edge: bleed (master) dimensions */}
+      {/* TOP-RIGHT BADGE STACK — Safety / Bleed / active shape modifier
+          all flow inside a single flex-wrap row anchored to the bleed's
+          top-right corner. flex-wrap guarantees no overlap on narrow
+          bleeds (badges drop to a new line instead). */}
       <div
-        className="absolute text-[11px] text-vp-muted whitespace-nowrap pointer-events-none"
+        className="absolute flex flex-wrap gap-2 justify-end pointer-events-none"
         style={{
-          left: cx,
-          top: cy - bleedHPx / 2 - 22,
-          transform: "translateX(-50%)",
+          left: cx - bleedWPx / 2,
+          top: cy - bleedHPx / 2 - 30,
+          width: bleedWPx,
         }}
       >
-        Bleed: {lengthMm} × {widthMm} mm
-      </div>
-      {/* Bottom edge: safe area dimensions */}
-      <div
-        className="absolute text-[11px] text-vp-safety whitespace-nowrap pointer-events-none"
-        style={{
-          left: cx,
-          top: cy + bleedHPx / 2 + 8,
-          transform: "translateX(-50%)",
-        }}
-      >
-        Safe: {safeLength} × {safeWidth} mm
+        <span className="inline-flex items-center rounded-full border border-vp-safety/40 bg-white/90 text-vp-safety text-[10px] font-medium px-2 py-0.5">
+          Safety Area
+        </span>
+        <span className="inline-flex items-center rounded-full border border-gray-300 bg-white/90 text-gray-500 text-[10px] font-medium px-2 py-0.5">
+          Bleed
+        </span>
+        {modifierLabel && (
+          <span className="inline-flex items-center rounded-full border border-vp-accent/30 bg-white/90 text-vp-accent text-[10px] font-semibold px-2 py-0.5 tabular-nums">
+            {modifierLabel}
+          </span>
+        )}
       </div>
 
-      {/* Left edge: width label (rotated) */}
+      {/* HORIZONTAL RULER — sits BELOW the bleed, spans its full width,
+          with T-shaped end caps and the length value centred on top. */}
       <div
-        className="absolute text-[11px] text-vp-muted whitespace-nowrap pointer-events-none"
+        className="absolute pointer-events-none"
         style={{
-          left: cx - bleedWPx / 2 - 12,
-          top: cy,
-          transform: "translate(-100%, -50%) rotate(-90deg)",
-          transformOrigin: "right center",
+          left: cx - bleedWPx / 2,
+          top: cy + bleedHPx / 2 + RULER_OFFSET,
+          width: bleedWPx,
+          height: 1,
         }}
       >
-        {widthMm} mm
+        {/* Main ruler line */}
+        <div className="absolute inset-0 bg-slate-300" />
+        {/* Left end cap */}
+        <div
+          className="absolute bg-slate-300"
+          style={{ left: 0, top: -TICK, width: 1, height: TICK * 2 + 1 }}
+        />
+        {/* Right end cap */}
+        <div
+          className="absolute bg-slate-300"
+          style={{ right: 0, top: -TICK, width: 1, height: TICK * 2 + 1 }}
+        />
+        {/* Centred label — small white pill so it breaks the line cleanly */}
+        <div
+          className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 px-1.5 bg-vp-rail text-[10.5px] text-slate-500 font-medium whitespace-nowrap"
+          style={{ top: 0 }}
+        >
+          {lengthLabel}
+        </div>
+      </div>
+
+      {/* VERTICAL RULER — sits LEFT of the bleed, spans its full height,
+          with end caps and the width value rotated alongside. */}
+      <div
+        className="absolute pointer-events-none"
+        style={{
+          left: cx - bleedWPx / 2 - RULER_OFFSET,
+          top: cy - bleedHPx / 2,
+          width: 1,
+          height: bleedHPx,
+        }}
+      >
+        <div className="absolute inset-0 bg-slate-300" />
+        {/* Top end cap */}
+        <div
+          className="absolute bg-slate-300"
+          style={{ top: 0, left: -TICK, width: TICK * 2 + 1, height: 1 }}
+        />
+        {/* Bottom end cap */}
+        <div
+          className="absolute bg-slate-300"
+          style={{ bottom: 0, left: -TICK, width: TICK * 2 + 1, height: 1 }}
+        />
+        {/* Rotated label */}
+        <div
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 px-1.5 py-0 bg-vp-rail text-[10.5px] text-slate-500 font-medium whitespace-nowrap"
+          style={{ transform: "translate(-50%, -50%) rotate(-90deg)" }}
+        >
+          {widthLabel}
+        </div>
       </div>
     </>
   );
 }
-
-/* ------------------------------------------------------------------ */
-/* Module-scoped history accessor                                      */
-/*                                                                     */
-/* The HistoryManager lives inside Workspace's lifecycle, but TopBar   */
-/* (and keyboard shortcuts) need to drive undo/redo from outside. We   */
-/* expose a tiny module-scoped registry that Workspace populates on    */
-/* mount. This keeps the API simple without putting a non-serialisable */
-/* class instance into Zustand state.                                  */
-/* ------------------------------------------------------------------ */
-
-let _historyManager: HistoryManager | null = null;
-
-export function _registerHistory(h: HistoryManager | null) {
-  _historyManager = h;
-}
-
-export const history = {
-  undo: () => _historyManager?.undo(),
-  redo: () => _historyManager?.redo(),
-};
 
 /* ------------------------------------------------------------------ */
 /* designOps — load saved fabric JSON / clear all user content        */
