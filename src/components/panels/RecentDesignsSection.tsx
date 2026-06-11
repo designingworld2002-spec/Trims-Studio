@@ -7,7 +7,6 @@ import {
   type RecentDesign,
 } from "@/lib/supabaseQueries";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { designOps } from "../Workspace";
 
 /**
  * Logged-in only. Lists this customer's most recently saved designs and
@@ -24,6 +23,7 @@ export function RecentDesignsSection() {
   const customerId = useCanvasStore((s) => s.customerId);
   const setWorkId = useCanvasStore((s) => s.setWorkId);
   const setRecentDesignLoaded = useCanvasStore((s) => s.setRecentDesignLoaded);
+  const loadDesign = useCanvasStore((s) => s.loadDesign);
   const [items, setItems] = useState<RecentDesign[] | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -48,10 +48,10 @@ export function RecentDesignsSection() {
   if (!customerId || !isSupabaseConfigured()) return null;
 
   const onPick = async (d: RecentDesign) => {
-    // Load via the designOps facade — pauses history, swaps canvas
-    // content, redraws guides, reapplies safe-area clip, takes one
-    // snapshot.
-    await designOps.loadJson(d.fabric_json, d.length_mm, d.width_mm);
+    // Restore the design — front + back + per-side paint + orientation
+    // + dims. The store action handles the full reconstruction including
+    // any 2-sided columns or legacy meta-mirror.
+    await loadDesign(d);
     // Treat this as a brand-new editing session: clear workId so the
     // next autosave POSTs a new row. Mark recent-loaded for the revert pill.
     setWorkId(null);

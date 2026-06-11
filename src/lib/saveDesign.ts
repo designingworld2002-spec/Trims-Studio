@@ -37,6 +37,11 @@ export interface SaveDesignInput {
    *  the production team has the exact blueprint. */
   canvasShape: CanvasShape;
   shapeModifiers: ShapeModifiers;
+  /** Tag orientation of the LIVE canvas at save time. Needed so Load
+   *  can restore the correct hole-edge placement. */
+  tagOrientation: "vertical" | "horizontal";
+  /** Background fill of the LIVE canvas at save time. */
+  backgroundColor: string;
   /** Which face is the LIVE canvas currently editing? Determines which
    *  side gets its snapshot from the live canvas vs. an offscreen render
    *  of the stored JSON. */
@@ -66,6 +71,31 @@ interface SidePayload {
   /** mm dims at snapshot time. */
   lengthMm: number;
   widthMm: number;
+  /** Tag orientation at snapshot time. */
+  tagOrientation: "vertical" | "horizontal";
+  /** Bleed background fill at snapshot time. */
+  backgroundColor: string;
+}
+
+/**
+ * The shape persisted under `meta.frontSide` / `meta.backSide` — every
+ * field Load needs to reconstruct a faithful SideSnapshot.
+ */
+interface PersistedSideMeta {
+  tagOrientation: "vertical" | "horizontal";
+  backgroundColor: string;
+  lengthMm: number;
+  widthMm: number;
+}
+
+function metaFromPayload(p: SidePayload | null): PersistedSideMeta | null {
+  if (!p) return null;
+  return {
+    tagOrientation: p.tagOrientation,
+    backgroundColor: p.backgroundColor,
+    lengthMm: p.lengthMm,
+    widthMm: p.widthMm,
+  };
 }
 
 const MM_TO_PX = 10;
@@ -77,22 +107,31 @@ export async function saveDesign(
 ): Promise<SaveDesignResult> {
   const { canvas } = input;
 
-  // 1. Capture LIVE canvas → PNG + JSON for the active side.
-  const live = snapshotLive(canvas, input.lengthMm, input.widthMm);
+  // 1. Capture LIVE canvas → PNG + JSON for the active side. Wrapped
+  //    so a malformed canvas can't poison the whole save.
+  let live: SidePayload | null = null;
+  try {
+    live = snapshotLive(
+      canvas,
+      input.lengthMm,
+      input.widthMm,
+      input.tagOrientation,
+      input.backgroundColor
+    );
+  } catch (e) {
+    console.warn("[saveDesign] live snapshot failed:", e);
+  }
 
-  // 2. If the product is two-sided and the OTHER side has stored work,
-  //    render it offscreen so the final payload always includes BOTH
-  //    sides — never silently drop the back design.
+  // 2. If the product is two-sided AND the OTHER side has actual stored
+  //    content, render it offscreen so the final payload always carries
+  //    both faces. `snapshotFromStoredSnapshot` is now null-safe and
+  //    timeout-safe — it resolves to null on any problem rather than
+  //    hanging the save flow.
   const otherStored =
     input.activeSide === "front" ? input.backDesign : input.frontDesign;
-  let otherSide: SidePayload | null = null;
-  if (input.supportsBackSide && otherStored) {
-    try {
-      otherSide = await snapshotFromStoredSnapshot(otherStored);
-    } catch (e) {
-      console.warn("[saveDesign] failed to render stored side, skipping:", e);
-    }
-  }
+  const otherSide = input.supportsBackSide
+    ? await snapshotFromStoredSnapshot(otherStored)
+    : null;
 
   // Slot the two payloads into front / back so downstream uploads + URLs
   // are unambiguous regardless of which face the user was editing.
@@ -105,10 +144,20 @@ export async function saveDesign(
     return saveLocally(frontSide, backSide, input);
   }
   try {
-    return await saveToSupabase(frontSide, backSide, input);
-  } catch (e) {
+    const remote = await saveToSupabase(frontSide, backSide, input);
+    if (remote) return remote;
+    // saveToSupabase returned null → uploads couldn't go through.
+    // Fall back to a local save so the user can still proceed.
     console.warn(
-      "[trims-studio] Supabase save failed, falling back to localStorage:",
+      "[trims-studio] Supabase upload returned no URLs, using localStorage"
+    );
+    return saveLocally(frontSide, backSide, input);
+  } catch (e) {
+    // saveToSupabase no longer throws on partial failure, but keep this
+    // catch as a last-resort safety net — `saveLocally` always produces
+    // a finalize URL, so the user is never stranded on "Saving…".
+    console.warn(
+      "[trims-studio] Supabase save threw unexpectedly, falling back to localStorage:",
       e
     );
     return saveLocally(frontSide, backSide, input);
@@ -122,7 +171,9 @@ export async function saveDesign(
 function snapshotLive(
   canvas: fabric.Canvas,
   lengthMm: number,
-  widthMm: number
+  widthMm: number,
+  tagOrientation: "vertical" | "horizontal",
+  backgroundColor: string
 ): SidePayload {
   const safety = canvas.getObjects().find((o) => (o as any).id === "safety");
   const bleed = canvas.getObjects().find((o) => (o as any).id === "bleed");
@@ -170,67 +221,112 @@ function snapshotLive(
     fabricJson,
     lengthMm,
     widthMm,
+    tagOrientation,
+    backgroundColor,
   };
 }
 
 /**
  * Render a SideSnapshot (stored in the Zustand store) onto an off-screen
  * fabric.StaticCanvas and export the PNG. Used to capture the side the
- * user ISN'T currently editing, so the final payload always carries
- * both faces.
+ * user ISN'T currently editing.
+ *
+ * Bulletproof guards:
+ *   - Null / undefined / malformed `snap` resolves to `null` (skip side).
+ *   - JSON parse failure resolves to `null` (don't block the save flow).
+ *   - `loadFromJSON` is wrapped in a 6 s safety timeout so a stuck
+ *     fabric callback can't hang the entire Continue button.
  */
 function snapshotFromStoredSnapshot(
-  snap: SideSnapshot
-): Promise<SidePayload> {
-  return new Promise((resolve, reject) => {
-    const off = new fabric.StaticCanvas(null as any, {
-      width: VIRTUAL_SIZE,
-      height: VIRTUAL_SIZE,
-    });
+  snap: SideSnapshot | null | undefined
+): Promise<SidePayload | null> {
+  return new Promise((resolve) => {
+    if (!snap || !snap.fabric) {
+      resolve(null);
+      return;
+    }
+    const lengthMm = snap.lengthMm > 0 ? snap.lengthMm : 0;
+    const widthMm = snap.widthMm > 0 ? snap.widthMm : 0;
+    if (lengthMm <= 0 || widthMm <= 0) {
+      resolve(null);
+      return;
+    }
+
+    let off: fabric.StaticCanvas | null = null;
+    let resolved = false;
+    const finish = (val: SidePayload | null) => {
+      if (resolved) return;
+      resolved = true;
+      try {
+        off?.dispose();
+      } catch {
+        /* swallow — disposal must never break the save flow */
+      }
+      resolve(val);
+    };
+    const timer = setTimeout(() => {
+      console.warn(
+        "[saveDesign] off-screen snapshot timed out, skipping this side"
+      );
+      finish(null);
+    }, 6000);
+
     try {
+      off = new fabric.StaticCanvas(null as any, {
+        width: VIRTUAL_SIZE,
+        height: VIRTUAL_SIZE,
+      });
       const payload =
         typeof snap.fabric === "string"
           ? JSON.parse(snap.fabric)
           : { ...(snap.fabric || {}) };
-      // Force the saved background colour to render via the bleed rect.
       payload.background = snap.backgroundColor;
       off.loadFromJSON(payload, () => {
-        off.getObjects().forEach((o: any) => {
-          if (o.id === "safety" || o.id === "holePunch") {
-            o.set("visible", false);
-          }
-          if (o.id === "bleed") {
-            o.set({
-              stroke: "transparent",
-              strokeWidth: 0,
-              fill: snap.backgroundColor,
-            });
-          }
-        });
-        off.renderAll();
-        const trimW = snap.lengthMm * MM_TO_PX;
-        const trimH = snap.widthMm * MM_TO_PX;
-        const cx = VIRTUAL_SIZE / 2;
-        const cy = VIRTUAL_SIZE / 2;
-        const previewDataUrl = off.toDataURL({
-          format: "png",
-          left: cx - trimW / 2,
-          top: cy - trimH / 2,
-          width: trimW,
-          height: trimH,
-          multiplier: PREVIEW_MULTIPLIER,
-        });
-        off.dispose();
-        resolve({
-          previewDataUrl,
-          fabricJson: payload,
-          lengthMm: snap.lengthMm,
-          widthMm: snap.widthMm,
-        });
+        try {
+          off!.getObjects().forEach((o: any) => {
+            if (o.id === "safety" || o.id === "holePunch") {
+              o.set("visible", false);
+            }
+            if (o.id === "bleed") {
+              o.set({
+                stroke: "transparent",
+                strokeWidth: 0,
+                fill: snap.backgroundColor,
+              });
+            }
+          });
+          off!.renderAll();
+          const trimW = lengthMm * MM_TO_PX;
+          const trimH = widthMm * MM_TO_PX;
+          const cx = VIRTUAL_SIZE / 2;
+          const cy = VIRTUAL_SIZE / 2;
+          const previewDataUrl = off!.toDataURL({
+            format: "png",
+            left: cx - trimW / 2,
+            top: cy - trimH / 2,
+            width: trimW,
+            height: trimH,
+            multiplier: PREVIEW_MULTIPLIER,
+          });
+          clearTimeout(timer);
+          finish({
+            previewDataUrl,
+            fabricJson: payload,
+            lengthMm,
+            widthMm,
+            tagOrientation: snap.tagOrientation,
+            backgroundColor: snap.backgroundColor,
+          });
+        } catch (e) {
+          console.warn("[saveDesign] off-screen render failed:", e);
+          clearTimeout(timer);
+          finish(null);
+        }
       });
     } catch (e) {
-      off.dispose();
-      reject(e);
+      console.warn("[saveDesign] off-screen setup failed:", e);
+      clearTimeout(timer);
+      finish(null);
     }
   });
 }
@@ -239,39 +335,64 @@ function snapshotFromStoredSnapshot(
 /* Supabase implementation                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Push the design to Supabase. Resilient to partial failures: if PNG
+ * uploads succeed but the row insert fails (e.g. the user's table is
+ * missing the new two-sided columns), we still return a usable result
+ * with the public PNG URLs so the storefront finalize page can render
+ * the design. Returns `null` only when nothing could be persisted at
+ * all (network down, bucket missing) — caller falls back to localStorage.
+ */
 async function saveToSupabase(
   frontSide: SidePayload | null,
   backSide: SidePayload | null,
   input: SaveDesignInput
-): Promise<SaveDesignResult> {
-  const supabase = getSupabase()!;
-  const designId = crypto.randomUUID();
+): Promise<SaveDesignResult | null> {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+
+  const designId =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `r_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const folder = input.customerId ?? "anon";
 
-  // Helper — upload one side's PNG and return its public URL + path.
+  // Upload one side. NEVER throws — returns nulls on any failure so the
+  // outer flow can still produce a finalize URL with whatever succeeded.
   const uploadSide = async (
     side: SidePayload,
     suffix: "front" | "back"
-  ): Promise<{ url: string; path: string }> => {
+  ): Promise<{ url: string | null; path: string | null }> => {
     const path = `${folder}/${designId}-${suffix}.png`;
-    const { error: uploadErr } = await supabase.storage
-      .from(SUPABASE_DESIGNS_BUCKET)
-      .upload(path, dataUrlToBlob(side.previewDataUrl), {
-        contentType: "image/png",
-        upsert: false,
-      });
-    if (uploadErr)
-      throw new Error(`storage upload (${suffix}): ${uploadErr.message}`);
-    const { data: pub } = supabase.storage
-      .from(SUPABASE_DESIGNS_BUCKET)
-      .getPublicUrl(path);
-    const url = pub?.publicUrl ?? null;
-    if (!url) {
-      throw new Error(
-        `storage getPublicUrl returned no URL for ${suffix} — check bucket "${SUPABASE_DESIGNS_BUCKET}"`
-      );
+    try {
+      const { error: uploadErr } = await supabase.storage
+        .from(SUPABASE_DESIGNS_BUCKET)
+        .upload(path, dataUrlToBlob(side.previewDataUrl), {
+          contentType: "image/png",
+          upsert: false,
+        });
+      if (uploadErr) {
+        console.warn(
+          `[saveDesign] storage upload (${suffix}) failed:`,
+          uploadErr.message
+        );
+        return { url: null, path: null };
+      }
+      const { data: pub } = supabase.storage
+        .from(SUPABASE_DESIGNS_BUCKET)
+        .getPublicUrl(path);
+      const url = pub?.publicUrl ?? null;
+      if (!url) {
+        console.warn(
+          `[saveDesign] getPublicUrl returned no URL for ${suffix} (bucket "${SUPABASE_DESIGNS_BUCKET}")`
+        );
+        return { url: null, path: null };
+      }
+      return { url, path };
+    } catch (e) {
+      console.warn(`[saveDesign] upload (${suffix}) threw:`, e);
+      return { url: null, path: null };
     }
-    return { url, path };
   };
 
   let frontUrl: string | null = null;
@@ -290,33 +411,103 @@ async function saveToSupabase(
     backPath = b.path;
   }
 
-  // Row insert. `preview_url` keeps backwards compatibility for any
-  // storefront code still reading the legacy single-PNG field.
-  const { error: insertErr } = await supabase.from("user_designs").insert({
-    id: designId,
-    customer_id: input.customerId,
-    product_slug: input.productSlug,
-    product_title: input.productTitle,
-    length_mm: input.lengthMm,
-    width_mm: input.widthMm,
-    fabric_json: frontSide?.fabricJson ?? null,
-    fabric_json_back: backSide?.fabricJson ?? null,
-    preview_url: frontUrl,
-    preview_url_back: backUrl,
-    preview_path: frontPath,
-    preview_path_back: backPath,
-    work_id: input.workId,
-    source_template_id: input.templateId,
-    meta: {
-      ua: navigator.userAgent,
-      savedAt: new Date().toISOString(),
-      canvasShape: input.canvasShape,
-      shapeModifiers: input.shapeModifiers,
-      supportsBackSide: input.supportsBackSide,
-      activeSide: input.activeSide,
-    },
-  });
-  if (insertErr) throw new Error(`insert row: ${insertErr.message}`);
+  // If BOTH uploads failed, treat as a Supabase outage and bail out so
+  // the caller falls back to localStorage (where the dataURLs survive).
+  if (frontSide && !frontUrl && backSide && !backUrl) {
+    return null;
+  }
+  if (frontSide && !frontUrl && !backSide) {
+    return null;
+  }
+
+  // Row insert. Wrapped in its own try/catch so a schema mismatch (e.g.
+  // the user hasn't added the new fabric_json_back / preview_url_back
+  // columns yet) doesn't abort the save — the PNGs are already public
+  // and Shopify can render them.
+  try {
+    const row: Record<string, any> = {
+      id: designId,
+      customer_id: input.customerId,
+      product_slug: input.productSlug,
+      product_title: input.productTitle,
+      length_mm: input.lengthMm,
+      width_mm: input.widthMm,
+      fabric_json: frontSide?.fabricJson ?? null,
+      preview_url: frontUrl,
+      preview_path: frontPath,
+      work_id: input.workId,
+      source_template_id: input.templateId,
+      meta: {
+        ua: navigator.userAgent,
+        savedAt: new Date().toISOString(),
+        canvasShape: input.canvasShape,
+        shapeModifiers: input.shapeModifiers,
+        supportsBackSide: input.supportsBackSide,
+        activeSide: input.activeSide,
+        // Per-side metadata so Load can reconstruct each face faithfully
+        // (background colour + orientation + dims) without needing the
+        // user to re-pick anything.
+        frontSide: metaFromPayload(frontSide),
+        backSide: metaFromPayload(backSide),
+        // Mirror the back-side payload INSIDE meta so it survives even
+        // when the dedicated columns don't exist yet.
+        backFabricJson: backSide?.fabricJson ?? null,
+        backPreviewUrl: backUrl,
+        backPreviewPath: backPath,
+      },
+    };
+    // Only include the new columns when we have data — keeps backwards
+    // compatibility with single-sided tables (PostgREST ignores nulls
+    // for absent columns but rejects unknown column NAMES).
+    if (backSide) {
+      row.fabric_json_back = backSide.fabricJson ?? null;
+      row.preview_url_back = backUrl;
+      row.preview_path_back = backPath;
+    }
+
+    const { error: insertErr } = await supabase
+      .from("user_designs")
+      .insert(row);
+
+    if (insertErr) {
+      console.warn(
+        "[saveDesign] row insert failed (schema mismatch?). PNGs were uploaded; continuing with public URLs:",
+        insertErr.message
+      );
+      // Retry once WITHOUT the two-sided columns, in case those are the
+      // schema mismatch culprits. Storefront still gets the URLs.
+      if (backSide) {
+        try {
+          const { error: retryErr } = await supabase
+            .from("user_designs")
+            .insert({
+              id: designId,
+              customer_id: input.customerId,
+              product_slug: input.productSlug,
+              product_title: input.productTitle,
+              length_mm: input.lengthMm,
+              width_mm: input.widthMm,
+              fabric_json: frontSide?.fabricJson ?? null,
+              preview_url: frontUrl,
+              preview_path: frontPath,
+              work_id: input.workId,
+              source_template_id: input.templateId,
+              meta: row.meta,
+            });
+          if (retryErr) {
+            console.warn(
+              "[saveDesign] retry insert without back columns also failed:",
+              retryErr.message
+            );
+          }
+        } catch (e) {
+          console.warn("[saveDesign] retry insert threw:", e);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[saveDesign] row insert threw (continuing):", e);
+  }
 
   return {
     designId,
@@ -364,6 +555,10 @@ function saveLocally(
     shape_modifiers: input.shapeModifiers,
     active_side: input.activeSide,
     supports_back_side: input.supportsBackSide,
+    meta: {
+      frontSide: metaFromPayload(frontSide),
+      backSide: metaFromPayload(backSide),
+    },
     saved_at: new Date().toISOString(),
   };
   try {

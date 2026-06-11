@@ -23,7 +23,25 @@ export interface RecentDesign {
    *  clean up the file on delete. */
   preview_path: string | null;
   fabric_json: any;
+  // ---- Optional 2-sided columns (added 2026) -----------------------
+  // Older rows / schemas may not carry these — every consumer must
+  // tolerate `undefined` / `null`.
+  fabric_json_back?: any | null;
+  preview_url_back?: string | null;
+  preview_path_back?: string | null;
+  /** Arbitrary persistence bag — see the meta shape used by
+   *  saveDesign.ts. Contains per-side metadata, canvasShape,
+   *  shapeModifiers, activeSide, etc. */
+  meta?: Record<string, any> | null;
 }
+
+/** Columns selected by every recent-design read. Lists the two-sided
+ *  columns explicitly — PostgREST tolerates absent columns gracefully
+ *  by returning them as `undefined`, so older schemas keep working. */
+const RECENT_DESIGN_COLUMNS =
+  "id, created_at, product_title, product_slug, length_mm, width_mm, " +
+  "preview_url, preview_path, fabric_json, " +
+  "fabric_json_back, preview_url_back, preview_path_back, meta";
 
 export async function fetchRecentDesigns(
   customerId: string | null,
@@ -31,14 +49,34 @@ export async function fetchRecentDesigns(
 ): Promise<RecentDesign[]> {
   const supabase = getSupabase();
   if (!supabase || !customerId) return [];
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("user_designs")
-    .select(
-      "id, created_at, product_title, product_slug, length_mm, width_mm, preview_url, preview_path, fabric_json"
-    )
+    .select(RECENT_DESIGN_COLUMNS)
     .eq("customer_id", customerId)
     .order("created_at", { ascending: false })
     .limit(limit);
+
+  // If the back columns don't exist in this Supabase project yet, the
+  // query will 400 with a "column does not exist" error. Fall back to
+  // the legacy column set — the row data still loads, just without the
+  // dedicated back columns (their content survives inside `meta`).
+  if (error && /column .* does not exist|does not exist|schema cache/i.test(
+    error.message || ""
+  )) {
+    console.warn(
+      "[recent designs] back columns missing; falling back to legacy select"
+    );
+    const legacy = await supabase
+      .from("user_designs")
+      .select(
+        "id, created_at, product_title, product_slug, length_mm, width_mm, preview_url, preview_path, fabric_json, meta"
+      )
+      .eq("customer_id", customerId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    data = legacy.data;
+    error = legacy.error;
+  }
   if (error) {
     console.warn("[recent designs] query failed:", error);
     return [];
@@ -224,13 +262,27 @@ export async function deleteDesign(
 export async function fetchDesign(id: string): Promise<RecentDesign | null> {
   const supabase = getSupabase();
   if (!supabase) return null;
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("user_designs")
-    .select(
-      "id, created_at, product_title, product_slug, length_mm, width_mm, preview_url, fabric_json"
-    )
+    .select(RECENT_DESIGN_COLUMNS)
     .eq("id", id)
     .single();
+  if (error && /column .* does not exist|does not exist|schema cache/i.test(
+    error.message || ""
+  )) {
+    console.warn(
+      "[fetch design] back columns missing; falling back to legacy select"
+    );
+    const legacy = await supabase
+      .from("user_designs")
+      .select(
+        "id, created_at, product_title, product_slug, length_mm, width_mm, preview_url, fabric_json, meta"
+      )
+      .eq("id", id)
+      .single();
+    data = legacy.data;
+    error = legacy.error;
+  }
   if (error) {
     console.warn("[fetch design] failed:", error);
     return null;

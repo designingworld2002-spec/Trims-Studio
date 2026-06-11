@@ -94,6 +94,29 @@ export function PreviewModal() {
     setSubmitting(false);
   }, [open]);
 
+  // BFCache (Back/Forward Cache) restore guard.
+  //
+  // After a successful save we navigate to the Shopify finalize page via
+  // `window.location.href = result.finalizeUrl`. If the user then clicks
+  // the browser's Back button, modern browsers restore THIS page from the
+  // BFCache — meaning React state (including `submitting = true`) is
+  // restored verbatim and the Continue button is stuck on "Saving…"
+  // forever, with no JS path to clear it.
+  //
+  // `pageshow` fires whenever the page is shown — including BFCache
+  // restores, where `event.persisted === true`. That's our signal to
+  // forcibly reset every transient flag so the modal is interactive
+  // again.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      setSubmitting(false);
+      setError(null);
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   // Display size — match the product aspect.
   const aspect = lengthMm / Math.max(1, widthMm);
   const dims = useMemo(() => {
@@ -115,6 +138,26 @@ export function PreviewModal() {
     if (!canvas) return;
     setSubmitting(true);
     setError(null);
+
+    // Absolute safety net: if the save flow somehow stalls (network
+    // hang, fabric callback never fires, etc.), forcibly unstick the
+    // button after 20 s so the user can retry — they should NEVER see
+    // a permanent "Saving…" state.
+    let safetyTimer: number | null = window.setTimeout(() => {
+      console.error("[trims-studio] save timed out (20s)");
+      setError(
+        "Saving is taking longer than expected. Please try again."
+      );
+      setSubmitting(false);
+      safetyTimer = null;
+    }, 20000);
+    const clearSafety = () => {
+      if (safetyTimer != null) {
+        window.clearTimeout(safetyTimer);
+        safetyTimer = null;
+      }
+    };
+
     try {
       const result = await saveDesign({
         canvas,
@@ -127,16 +170,35 @@ export function PreviewModal() {
         templateId,
         canvasShape: canvasShapeStore,
         shapeModifiers: shapeModifiersStore,
+        tagOrientation,
+        backgroundColor,
         activeSide,
         frontDesign,
         backDesign,
         supportsBackSide: supportsBack,
       });
+      clearSafety();
+      if (!result?.finalizeUrl) {
+        // saveDesign promises always to return a result, but defend
+        // against a future refactor that could resolve to null.
+        throw new Error("Save returned no finalize URL");
+      }
       window.location.href = result.finalizeUrl;
+      // On some platforms `window.location.href = …` doesn't navigate
+      // immediately (popup blockers, sandboxed iframes, etc.). Drop the
+      // spinner shortly after so the button isn't trapped if the
+      // redirect is suppressed.
+      window.setTimeout(() => setSubmitting(false), 4000);
     } catch (e: any) {
       console.error("[trims-studio] save failed:", e);
       setError(e?.message || "Save failed. Please try again.");
+      clearSafety();
       setSubmitting(false);
+    } finally {
+      // Belt-and-suspenders: if neither the success path's setTimeout
+      // nor the catch's setSubmitting fired (e.g. unhandled rejection),
+      // make absolutely sure the safety timer is cleared.
+      clearSafety();
     }
   };
 

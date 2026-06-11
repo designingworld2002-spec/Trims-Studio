@@ -1158,6 +1158,22 @@ export function Workspace() {
         canvas.requestRenderAll();
         hist.resume(true);
       },
+      redrawGuides: () => {
+        // Pulls every guide input fresh from the store — bypasses React
+        // effect batching so load / side-switch flows can guarantee a
+        // redraw after their atomic state updates.
+        const s = useCanvasStore.getState();
+        hist.pause();
+        guidesRef.current = drawGuides(
+          canvas,
+          s.canvasLengthMm,
+          s.canvasWidthMm,
+          s.backgroundColor
+        );
+        applySafeAreaClipToAllObjects(canvas, guidesRef.current);
+        canvas.requestRenderAll();
+        hist.resume(false);
+      },
     });
 
     return () => {
@@ -1899,6 +1915,10 @@ function CanvasLabels({
 
 interface DesignOpsImpl {
   loadJson: (json: any, lengthMm: number, widthMm: number) => Promise<void>;
+  /** Force a fresh drawGuides call using the CURRENT store state. Used
+   *  by side-switch / load flows that need guides to redraw regardless
+   *  of React effect batching. */
+  redrawGuides: () => void;
   clearAll: () => void;
 }
 
@@ -1912,4 +1932,5 @@ export const designOps = {
   loadJson: (json: any, lengthMm: number, widthMm: number) =>
     _designOps?.loadJson(json, lengthMm, widthMm),
   clearAll: () => _designOps?.clearAll(),
+  redrawGuides: () => _designOps?.redrawGuides(),
 };

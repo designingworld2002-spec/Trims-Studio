@@ -43,6 +43,24 @@ export const DEFAULT_SHAPE_MODIFIERS: ShapeModifiers = {
 };
 
 /**
+ * Loose shape of a saved-design row as it returns from Supabase or
+ * localStorage. Every field is optional because the persistence layer
+ * has gone through several iterations — older rows lack many fields.
+ */
+export interface SavedDesignRow {
+  id?: string;
+  length_mm?: number;
+  width_mm?: number;
+  fabric_json?: any;
+  fabric_json_back?: any | null;
+  preview_url?: string | null;
+  preview_url_back?: string | null;
+  /** Optional metadata bag — may contain per-side info + the legacy
+   *  `backFabricJson` mirror. See saveDesign.ts. */
+  meta?: Record<string, any> | null;
+}
+
+/**
  * Per-side persistence payload. Bundles every store field that lives
  * OUTSIDE the fabric JSON so a Front ↔ Back switch (or an undo) can
  * faithfully restore the exact look the side had at snapshot time.
@@ -67,6 +85,43 @@ function clamp01(v: number): number {
   if (v < 0) return 0;
   if (v > 1) return 1;
   return v;
+}
+
+/** Tolerant JSON parse — accepts an object verbatim or parses a string. */
+function parseJsonLoose(raw: any): any | null {
+  if (raw == null) return null;
+  if (typeof raw === "object") return raw;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Return the first non-empty string from the candidates list. */
+function firstString(...candidates: any[]): string | null {
+  for (const c of candidates) {
+    if (typeof c === "string" && c.length > 0) return c;
+  }
+  return null;
+}
+
+function toFiniteNumber(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Sniff the bleed rectangle's fill out of a fabric JSON payload. The
+ *  bleed is `excludeFromExport`, so it usually ISN'T in the saved JSON
+ *  — but older templates / direct toJSON exports might include it. */
+function bleedFillFromJson(json: any): string | null {
+  if (!json || !Array.isArray(json.objects)) return null;
+  const bleed = json.objects.find((o: any) => o && o.id === "bleed");
+  if (bleed && typeof bleed.fill === "string") return bleed.fill;
+  return null;
 }
 
 /** Translate the legacy productConfig `canvasClipShape` into a CanvasShape. */
@@ -381,6 +436,15 @@ export interface CanvasStoreState {
   /** Whether the "Change the back" chooser modal is open. */
   backChooserOpen: boolean;
   setBackChooserOpen: (b: boolean) => void;
+
+  /**
+   * Restore a previously-saved design (both sides + paint + orientation
+   * + dims) onto the live canvas. Used by the "Recent designs" picker.
+   *
+   * Accepts a loose row shape so both Supabase and localStorage records
+   * (which use slightly different field names) can be passed verbatim.
+   */
+  loadDesign: (row: SavedDesignRow) => Promise<void>;
   /**
    * Build the back-side design from one of three starting points and
    * switch the canvas to the back side. Used by the "Change the back"
@@ -987,6 +1051,148 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   setBackChooserOpen: (b) => set({ backChooserOpen: b }),
   setFrontDesign: (snap) => set({ frontDesign: snap }),
   setBackDesign: (snap) => set({ backDesign: snap }),
+  loadDesign: async (row) => {
+    // Wrap the entire restore in a try / catch so a single malformed
+    // field never blocks the user from loading a design.
+    try {
+      if (!row) {
+        console.error("[loadDesign] no row supplied");
+        return;
+      }
+
+      // ----- Reconstruct the FRONT side --------------------------------
+      const rawFront = row.fabric_json;
+      if (!rawFront) {
+        console.error("[loadDesign] row has no fabric_json — aborting");
+        return;
+      }
+      const frontJsonObj = parseJsonLoose(rawFront);
+      if (!frontJsonObj) {
+        console.error("[loadDesign] front fabric_json is not parseable");
+        return;
+      }
+
+      const meta = row.meta || {};
+      const frontMeta = meta.frontSide || {};
+      // Background colour priority (high → low):
+      //   1) meta.frontSide.backgroundColor (per-side persisted)
+      //   2) fabric_json.background (fabric's native top-level field)
+      //   3) Bleed rect's fill, if the fabric JSON contains one
+      //   4) "#ffffff"
+      const frontBg =
+        firstString(
+          frontMeta.backgroundColor,
+          frontJsonObj.background,
+          bleedFillFromJson(frontJsonObj)
+        ) ?? "#ffffff";
+      const frontOrientation: "vertical" | "horizontal" =
+        frontMeta.tagOrientation === "horizontal" ? "horizontal" : "vertical";
+      const frontLen =
+        toFiniteNumber(frontMeta.lengthMm) ??
+        toFiniteNumber(row.length_mm) ??
+        90;
+      const frontWid =
+        toFiniteNumber(frontMeta.widthMm) ??
+        toFiniteNumber(row.width_mm) ??
+        50;
+      const frontSnap: SideSnapshot = {
+        fabric: frontJsonObj,
+        backgroundColor: frontBg,
+        tagOrientation: frontOrientation,
+        lengthMm: frontLen,
+        widthMm: frontWid,
+      };
+
+      // ----- Reconstruct the BACK side, if any -------------------------
+      // Prefer the dedicated column; fall back to the meta-mirrored copy
+      // (used when the schema was missing the column at save time).
+      const rawBack = row.fabric_json_back ?? meta.backFabricJson ?? null;
+      let backSnap: SideSnapshot | null = null;
+      if (rawBack) {
+        const backJsonObj = parseJsonLoose(rawBack);
+        if (backJsonObj) {
+          const backMeta = meta.backSide || {};
+          const backBg =
+            firstString(
+              backMeta.backgroundColor,
+              backJsonObj.background,
+              bleedFillFromJson(backJsonObj)
+            ) ?? frontBg;
+          // Honour the back's saved orientation even when it differs
+          // from the front (front-landscape + back-portrait is valid).
+          // Only fall back to the front's orientation when the back has
+          // no orientation saved at all.
+          const backOrientation: "vertical" | "horizontal" =
+            backMeta.tagOrientation === "horizontal"
+              ? "horizontal"
+              : backMeta.tagOrientation === "vertical"
+                ? "vertical"
+                : frontOrientation;
+          const backLen =
+            toFiniteNumber(backMeta.lengthMm) ?? frontLen;
+          const backWid =
+            toFiniteNumber(backMeta.widthMm) ?? frontWid;
+          backSnap = {
+            fabric: backJsonObj,
+            backgroundColor: backBg,
+            tagOrientation: backOrientation,
+            lengthMm: backLen,
+            widthMm: backWid,
+          };
+        } else {
+          console.warn(
+            "[loadDesign] back JSON failed to parse — back side will be empty"
+          );
+        }
+      }
+
+      // ----- Restore optional shape state ------------------------------
+      const restoredCanvasShape =
+        typeof meta.canvasShape === "string" ? meta.canvasShape : null;
+      const restoredShapeModifiers =
+        meta.shapeModifiers && typeof meta.shapeModifiers === "object"
+          ? meta.shapeModifiers
+          : null;
+
+      // ----- Apply atomically to the store -----------------------------
+      // One set() so the dim-change effect in Workspace observes a
+      // CONSISTENT target state on its first re-render.
+      set((s) => ({
+        activeSide: "front",
+        frontDesign: frontSnap,
+        backDesign: backSnap,
+        tagOrientation: frontOrientation,
+        backgroundColor: frontBg,
+        canvasLengthMm: frontLen,
+        canvasWidthMm: frontWid,
+        aspectRatio: frontLen / Math.max(1, frontWid),
+        _skipNextDimRescale: true,
+        canvasShape:
+          (restoredCanvasShape as CanvasShape | null) ?? s.canvasShape,
+        shapeModifiers: restoredShapeModifiers
+          ? { ...s.shapeModifiers, ...restoredShapeModifiers }
+          : s.shapeModifiers,
+      }));
+
+      // ----- Apply to canvas via designOps ----------------------------
+      // Inject the saved background into the JSON's top-level `background`
+      // field so designOps.loadJson restores it correctly (matching the
+      // pattern setActiveSide uses).
+      const fabricPayload = { ...frontJsonObj, background: frontBg };
+      const { designOps } = await import("@/components/Workspace");
+      await designOps.loadJson(fabricPayload, frontLen, frontWid);
+
+      // After loadJson resolves, force a fresh guide redraw using the
+      // CURRENT store state. This bypasses React effect batching: even
+      // if the dim-effect skipped a re-run (because the dep value didn't
+      // change between commits), redrawGuides reads tagOrientation +
+      // dims + bg directly from `useCanvasStore.getState()` and rebuilds
+      // bleed / safety / holePunch / clips in one synchronous pass.
+      designOps.redrawGuides?.();
+    } catch (e) {
+      console.error("[loadDesign] failed:", e);
+    }
+  },
   initBackDesign: (kind) => {
     const s = get();
     if (s.activeSide === "back") {
