@@ -74,14 +74,18 @@ export async function fetchRecentDesigns(
       .eq("customer_id", customerId)
       .order("created_at", { ascending: false })
       .limit(limit);
-    data = legacy.data;
+    // Double assertion — Supabase's strict generics fall back to
+    // `GenericStringError[]` when the dynamic `RECENT_DESIGN_COLUMNS`
+    // string can't be parsed at compile time. We know the runtime
+    // shape matches RecentDesign[], so route through `unknown`.
+    data = legacy.data as unknown as typeof data;
     error = legacy.error;
   }
   if (error) {
     console.warn("[recent designs] query failed:", error);
     return [];
   }
-  return (data ?? []) as RecentDesign[];
+  return (data ?? []) as unknown as RecentDesign[];
 }
 
 export interface RecentUpload {
@@ -280,14 +284,15 @@ export async function fetchDesign(id: string): Promise<RecentDesign | null> {
       )
       .eq("id", id)
       .single();
-    data = legacy.data;
+    // Double assertion — same reason as fetchRecentDesigns above.
+    data = legacy.data as unknown as typeof data;
     error = legacy.error;
   }
   if (error) {
     console.warn("[fetch design] failed:", error);
     return null;
   }
-  return data as RecentDesign;
+  return data as unknown as RecentDesign;
 }
 
 export { ASSETS_BUCKET, SUPABASE_DESIGNS_BUCKET };
