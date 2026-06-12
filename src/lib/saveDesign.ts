@@ -177,11 +177,17 @@ function snapshotLive(
 ): SidePayload {
   const safety = canvas.getObjects().find((o) => (o as any).id === "safety");
   const bleed = canvas.getObjects().find((o) => (o as any).id === "bleed");
+  // Hide the hole punch guide too — it's a STUDIO editing overlay
+  // (dashed red ring) that must NOT bleed into the saved PNG that
+  // ships to the Shopify finalize page.
+  const hole = canvas.getObjects().find((o) => (o as any).id === "holePunch");
   const prevSafetyOpacity = safety?.opacity ?? 1;
   const prevBleedStroke = (bleed as any)?.stroke;
   const prevBleedStrokeWidth = (bleed as any)?.strokeWidth;
+  const prevHoleOpacity = hole?.opacity ?? 1;
   if (safety) safety.set("opacity", 0);
   if (bleed) bleed.set({ stroke: "transparent", strokeWidth: 0 });
+  if (hole) hole.set("opacity", 0);
   canvas.renderAll();
 
   const trimW = lengthMm * MM_TO_PX;
@@ -204,6 +210,7 @@ function snapshotLive(
       stroke: prevBleedStroke as any,
       strokeWidth: prevBleedStrokeWidth as any,
     });
+  if (hole) hole.set("opacity", prevHoleOpacity);
   canvas.renderAll();
 
   const fabricJson = canvas.toJSON([
