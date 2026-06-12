@@ -10,7 +10,6 @@ import type {
   ShapeModifiers,
   SideSnapshot,
 } from "@/store/canvasStore";
-import type { VisualGuides } from "@/config/productConfig";
 
 /**
  * Final "Continue" save flow.
@@ -43,10 +42,6 @@ export interface SaveDesignInput {
   tagOrientation: "vertical" | "horizontal";
   /** Background fill of the LIVE canvas at save time. */
   backgroundColor: string;
-  /** Active product's visual guides — drives hole-punch position in the
-   *  exported PNG (we punch a true alpha-zero circle so the grommet
-   *  overlay on the finalize page can sit in a real hole). */
-  visualGuides: VisualGuides;
   /** Which face is the LIVE canvas currently editing? Determines which
    *  side gets its snapshot from the live canvas vs. an offscreen render
    *  of the stored JSON. */
@@ -116,13 +111,14 @@ export async function saveDesign(
   //    so a malformed canvas can't poison the whole save.
   let live: SidePayload | null = null;
   try {
-    live = await snapshotLive(
+    live = snapshotLive(
       canvas,
       input.lengthMm,
       input.widthMm,
       input.tagOrientation,
       input.backgroundColor,
-      input.visualGuides
+      input.canvasShape,
+      input.shapeModifiers
     );
   } catch (e) {
     console.warn("[saveDesign] live snapshot failed:", e);
@@ -130,13 +126,17 @@ export async function saveDesign(
 
   // 2. If the product is two-sided AND the OTHER side has actual stored
   //    content, render it offscreen so the final payload always carries
-  //    both faces. `snapshotFromStoredSnapshot` is now null-safe and
+  //    both faces. `snapshotFromStoredSnapshot` is null-safe and
   //    timeout-safe — it resolves to null on any problem rather than
   //    hanging the save flow.
   const otherStored =
     input.activeSide === "front" ? input.backDesign : input.frontDesign;
   const otherSide = input.supportsBackSide
-    ? await snapshotFromStoredSnapshot(otherStored, input.visualGuides)
+    ? await snapshotFromStoredSnapshot(
+        otherStored,
+        input.canvasShape,
+        input.shapeModifiers
+      )
     : null;
 
   // Slot the two payloads into front / back so downstream uploads + URLs
@@ -174,121 +174,241 @@ export async function saveDesign(
 /* Side snapshot helpers                                                */
 /* ------------------------------------------------------------------ */
 
-/**
- * Where the hole punch lives in the exported PNG's pixel space (origin
- * = top-left of the bleed rectangle), already scaled by PREVIEW_MULTIPLIER.
- */
-interface HolePunchPx {
-  cx: number;
-  cy: number;
-  r: number;
-}
+/* ----- Shape silhouette geometry (mirrors Workspace.tsx) ----------- */
 
-function computeHolePunchPx(
-  lengthMm: number,
-  widthMm: number,
-  visualGuides: VisualGuides | null | undefined,
-  tagOrientation: "vertical" | "horizontal",
-  multiplier: number
-): HolePunchPx | null {
-  if (
-    !visualGuides ||
-    !visualGuides.hasHolePunch ||
-    visualGuides.holePunchRadiusMm <= 0
-  ) {
-    return null;
+function cutCornerPoints(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  slant: number,
+  cornersMode: "top" | "all",
+  tagOrientation: "vertical" | "horizontal"
+): { x: number; y: number }[] {
+  const c = Math.max(0, Math.min(slant, w * 0.4, h * 0.4));
+  if (cornersMode === "all") {
+    return [
+      { x: left + c, y: top },
+      { x: left + w - c, y: top },
+      { x: left + w, y: top + c },
+      { x: left + w, y: top + h - c },
+      { x: left + w - c, y: top + h },
+      { x: left + c, y: top + h },
+      { x: left, y: top + h - c },
+      { x: left, y: top + c },
+    ];
   }
-  const trimW = lengthMm * MM_TO_PX;
-  const trimH = widthMm * MM_TO_PX;
-  const r = visualGuides.holePunchRadiusMm * MM_TO_PX;
-  const offset = visualGuides.holePunchOffsetFromTopMm * MM_TO_PX;
   if (tagOrientation === "horizontal") {
-    return {
-      cx: (trimW - offset) * multiplier,
-      cy: (trimH / 2) * multiplier,
-      r: r * multiplier,
-    };
+    // TR + BR chamfered, left edge square.
+    return [
+      { x: left, y: top },
+      { x: left + w - c, y: top },
+      { x: left + w, y: top + c },
+      { x: left + w, y: top + h - c },
+      { x: left + w - c, y: top + h },
+      { x: left, y: top + h },
+    ];
   }
-  return {
-    cx: (trimW / 2) * multiplier,
-    cy: offset * multiplier,
-    r: r * multiplier,
-  };
+  // vertical — TL + TR chamfered, bottom edge square.
+  return [
+    { x: left + c, y: top },
+    { x: left + w - c, y: top },
+    { x: left + w, y: top + c },
+    { x: left + w, y: top + h },
+    { x: left, y: top + h },
+    { x: left, y: top + c },
+  ];
+}
+
+function starPolyPoints(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  points: number
+): { x: number; y: number }[] {
+  const cx = left + w / 2;
+  const cy = top + h / 2;
+  const outerX = w / 2;
+  const outerY = h / 2;
+  const innerScale = 0.38;
+  const n = Math.max(5, Math.floor(points));
+  const total = n * 2;
+  const out: { x: number; y: number }[] = [];
+  const start = -Math.PI / 2;
+  for (let i = 0; i < total; i++) {
+    const a = start + (i * Math.PI) / n;
+    const rx = i % 2 === 0 ? outerX : outerX * innerScale;
+    const ry = i % 2 === 0 ? outerY : outerY * innerScale;
+    out.push({ x: cx + Math.cos(a) * rx, y: cy + Math.sin(a) * ry });
+  }
+  return out;
+}
+
+function topEdgeRoundedRectPath(
+  w: number,
+  h: number,
+  r: number,
+  tagOrientation: "vertical" | "horizontal"
+): string {
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+  if (tagOrientation === "horizontal") {
+    // TR + BR rounded; left edge square.
+    return [
+      `M 0 0`,
+      `L ${w - radius} 0`,
+      `A ${radius} ${radius} 0 0 1 ${w} ${radius}`,
+      `L ${w} ${h - radius}`,
+      `A ${radius} ${radius} 0 0 1 ${w - radius} ${h}`,
+      `L 0 ${h}`,
+      "Z",
+    ].join(" ");
+  }
+  // vertical — TL + TR rounded; bottom edge square.
+  return [
+    `M ${radius} 0`,
+    `L ${w - radius} 0`,
+    `A ${radius} ${radius} 0 0 1 ${w} ${radius}`,
+    `L ${w} ${h}`,
+    `L 0 ${h}`,
+    `L 0 ${radius}`,
+    `A ${radius} ${radius} 0 0 1 ${radius} 0`,
+    "Z",
+  ].join(" ");
 }
 
 /**
- * Punch a TRUE alpha-zero circular hole through a PNG dataURL using
- * `globalCompositeOperation = 'destination-out'`. The PNG is drawn to a
- * fresh 2D canvas, the hole disc erases everything underneath (including
- * the bleed fill), and the result is re-exported as a PNG. Resolves with
- * the original dataURL if `hole` is null or the image fails to load.
+ * Build a fabric.Object matching the active silhouette, positioned at the
+ * VIRTUAL canvas's bleed rectangle. Returned object is `absolutePositioned`
+ * so assigning it to `canvas.clipPath` clips the entire rendered output
+ * to the cut-corner / round / oval / star silhouette — anything outside
+ * the shape exports as alpha-zero.
  */
-function punchHoleInPng(
-  dataUrl: string,
-  hole: HolePunchPx | null
-): Promise<string> {
-  return new Promise((resolve) => {
-    if (!hole || hole.r <= 0) {
-      resolve(dataUrl);
-      return;
-    }
-    const img = new Image();
-    img.onload = () => {
-      try {
-        const c = document.createElement("canvas");
-        c.width = img.width;
-        c.height = img.height;
-        const ctx = c.getContext("2d");
-        if (!ctx) {
-          resolve(dataUrl);
-          return;
-        }
-        ctx.drawImage(img, 0, 0);
-        ctx.globalCompositeOperation = "destination-out";
-        ctx.beginPath();
-        ctx.arc(hole.cx, hole.cy, hole.r, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalCompositeOperation = "source-over";
-        resolve(c.toDataURL("image/png"));
-      } catch (e) {
-        console.warn("[saveDesign] hole punch failed:", e);
-        resolve(dataUrl);
+function buildShapeClipPath(
+  canvasShape: CanvasShape,
+  modifiers: ShapeModifiers,
+  tagOrientation: "vertical" | "horizontal",
+  lengthMm: number,
+  widthMm: number
+): fabric.Object {
+  const bleedW = lengthMm * MM_TO_PX;
+  const bleedH = widthMm * MM_TO_PX;
+  const cx = VIRTUAL_SIZE / 2;
+  const cy = VIRTUAL_SIZE / 2;
+  const left = cx - bleedW / 2;
+  const top = cy - bleedH / 2;
+
+  const shortEdgeMm = Math.max(1, Math.min(lengthMm, widthMm));
+  const maxModMm = shortEdgeMm * 0.4;
+  const radiusPx =
+    Math.max(0, Math.min(modifiers.cornerRadiusMm, maxModMm)) * MM_TO_PX;
+  const slantPx =
+    Math.max(0, Math.min(modifiers.slantLengthMm, maxModMm)) * MM_TO_PX;
+
+  const opts: any = { absolutePositioned: true };
+
+  switch (canvasShape) {
+    case "round-corners": {
+      const r = Math.max(0, Math.min(radiusPx, bleedW / 2, bleedH / 2));
+      if (modifiers.cornersMode === "top") {
+        const d = topEdgeRoundedRectPath(bleedW, bleedH, r, tagOrientation);
+        return new fabric.Path(d, { left, top, ...opts });
       }
-    };
-    img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
-  });
+      return new fabric.Rect({
+        left,
+        top,
+        width: bleedW,
+        height: bleedH,
+        rx: r,
+        ry: r,
+        ...opts,
+      });
+    }
+    case "cut-corners":
+      return new fabric.Polygon(
+        cutCornerPoints(
+          left,
+          top,
+          bleedW,
+          bleedH,
+          slantPx,
+          modifiers.cornersMode,
+          tagOrientation
+        ),
+        opts
+      );
+    case "oval":
+      return new fabric.Ellipse({
+        left,
+        top,
+        rx: bleedW / 2,
+        ry: bleedH / 2,
+        ...opts,
+      });
+    case "star":
+      return new fabric.Polygon(
+        starPolyPoints(left, top, bleedW, bleedH, modifiers.starPoints),
+        opts
+      );
+    case "rectangle":
+    default:
+      return new fabric.Rect({
+        left,
+        top,
+        width: bleedW,
+        height: bleedH,
+        ...opts,
+      });
+  }
 }
 
-async function snapshotLive(
+/**
+ * Capture the LIVE canvas to a PNG.
+ *
+ * Sequence:
+ *   1. Hide the guide layer (bleed/safety/holePunch).
+ *   2. Set the canvas background to `transparent` and apply a canvas-level
+ *      `clipPath` matching the product's silhouette.
+ *   3. Export the trim rectangle.
+ *   4. Restore EVERY mutated field so the editor isn't disrupted.
+ *
+ * The clipPath enforces the cut-corner / round / oval / star silhouette,
+ * so areas outside the product shape land as alpha-zero in the PNG.
+ */
+function snapshotLive(
   canvas: fabric.Canvas,
   lengthMm: number,
   widthMm: number,
   tagOrientation: "vertical" | "horizontal",
   backgroundColor: string,
-  visualGuides: VisualGuides | null
-): Promise<SidePayload> {
+  canvasShape: CanvasShape,
+  shapeModifiers: ShapeModifiers
+): SidePayload {
   const safety = canvas.getObjects().find((o) => (o as any).id === "safety");
   const bleed = canvas.getObjects().find((o) => (o as any).id === "bleed");
   const hole = canvas.getObjects().find((o) => (o as any).id === "holePunch");
 
-  // Cache every property we're about to mutate.
+  // Cache every field we're about to mutate.
   const prevCanvasBg = (canvas as any).backgroundColor;
+  const prevCanvasClip = (canvas as any).clipPath;
   const prevSafetyOpacity = safety?.opacity ?? 1;
-  const prevBleedStroke = (bleed as any)?.stroke;
-  const prevBleedStrokeWidth = (bleed as any)?.strokeWidth;
+  const prevBleedOpacity = bleed?.opacity ?? 1;
   const prevHoleOpacity = hole?.opacity ?? 1;
 
-  // CRITICAL: drop the canvas background to transparent so only the
-  // bleed polygon (cut-corners / rounded / oval shape) paints pixels.
-  // Anything OUTSIDE the bleed silhouette ends up alpha-zero in the
-  // PNG, which is what gives the BACK side its transparent corners.
-  (canvas as any).backgroundColor = "transparent";
+  // Hide all guides — canvas.bg + clipPath own the silhouette now.
   if (safety) safety.set("opacity", 0);
-  if (bleed) bleed.set({ stroke: "transparent", strokeWidth: 0 });
-  // We hide the hole guide here; the destination-out punch below
-  // produces the true transparent hole regardless of guide state.
+  if (bleed) bleed.set("opacity", 0);
   if (hole) hole.set("opacity", 0);
+  // Paint the design's actual background colour INSIDE the clip; outside
+  // the clip the canvas renders transparent (PNG alpha = 0).
+  (canvas as any).backgroundColor = backgroundColor || "transparent";
+  (canvas as any).clipPath = buildShapeClipPath(
+    canvasShape,
+    shapeModifiers,
+    tagOrientation,
+    lengthMm,
+    widthMm
+  );
   canvas.renderAll();
 
   const trimW = lengthMm * MM_TO_PX;
@@ -296,7 +416,7 @@ async function snapshotLive(
   const cx = VIRTUAL_SIZE / 2;
   const cy = VIRTUAL_SIZE / 2;
 
-  const rawDataUrl = canvas.toDataURL({
+  const previewDataUrl = canvas.toDataURL({
     format: "png",
     left: cx - trimW / 2,
     top: cy - trimH / 2,
@@ -305,27 +425,13 @@ async function snapshotLive(
     multiplier: PREVIEW_MULTIPLIER,
   });
 
-  // Restore the live canvas BEFORE awaiting the hole punch so the user
-  // never sees a flicker / blank editor while the PNG is re-processed.
+  // Restore the live canvas exactly as it was.
   (canvas as any).backgroundColor = prevCanvasBg;
+  (canvas as any).clipPath = prevCanvasClip;
   if (safety) safety.set("opacity", prevSafetyOpacity);
-  if (bleed)
-    bleed.set({
-      stroke: prevBleedStroke as any,
-      strokeWidth: prevBleedStrokeWidth as any,
-    });
+  if (bleed) bleed.set("opacity", prevBleedOpacity);
   if (hole) hole.set("opacity", prevHoleOpacity);
   canvas.renderAll();
-
-  // Punch the real transparent hole using destination-out, off-canvas.
-  const holePx = computeHolePunchPx(
-    lengthMm,
-    widthMm,
-    visualGuides,
-    tagOrientation,
-    PREVIEW_MULTIPLIER
-  );
-  const previewDataUrl = await punchHoleInPng(rawDataUrl, holePx);
 
   const fabricJson = canvas.toJSON([
     "id",
@@ -360,7 +466,8 @@ async function snapshotLive(
  */
 function snapshotFromStoredSnapshot(
   snap: SideSnapshot | null | undefined,
-  visualGuides: VisualGuides | null
+  canvasShape: CanvasShape,
+  shapeModifiers: ShapeModifiers
 ): Promise<SidePayload | null> {
   return new Promise((resolve) => {
     if (!snap || !snap.fabric) {
@@ -405,24 +512,36 @@ function snapshotFromStoredSnapshot(
       payload.background = snap.backgroundColor;
       off.loadFromJSON(payload, () => {
         try {
+          // Hide any leaked guide objects (older saves sometimes have
+          // them in the JSON). `excludeFromExport` on bleed/safety/hole
+          // means modern saves DON'T include them, but stay defensive.
           off!.getObjects().forEach((o: any) => {
-            if (o.id === "safety" || o.id === "holePunch") {
-              o.set("visible", false);
-            }
-            if (o.id === "bleed") {
-              o.set({
-                stroke: "transparent",
-                strokeWidth: 0,
-                fill: snap.backgroundColor,
-              });
+            if (
+              o.id === "safety" ||
+              o.id === "holePunch" ||
+              o.id === "bleed"
+            ) {
+              o.set("opacity", 0);
             }
           });
+          // Paint the design's saved background INSIDE the silhouette;
+          // OUTSIDE the canvas-level clipPath the export is alpha-zero.
+          // This is the IDENTICAL pattern snapshotLive uses so both
+          // faces produce PNGs with matching transparent cut-corners.
+          (off as any).backgroundColor = snap.backgroundColor || "transparent";
+          (off as any).clipPath = buildShapeClipPath(
+            canvasShape,
+            shapeModifiers,
+            snap.tagOrientation,
+            lengthMm,
+            widthMm
+          );
           off!.renderAll();
           const trimW = lengthMm * MM_TO_PX;
           const trimH = widthMm * MM_TO_PX;
           const cx = VIRTUAL_SIZE / 2;
           const cy = VIRTUAL_SIZE / 2;
-          const rawDataUrl = off!.toDataURL({
+          const previewDataUrl = off!.toDataURL({
             format: "png",
             left: cx - trimW / 2,
             top: cy - trimH / 2,
@@ -430,25 +549,17 @@ function snapshotFromStoredSnapshot(
             height: trimH,
             multiplier: PREVIEW_MULTIPLIER,
           });
-          // Punch the real transparent hole — matches snapshotLive so
-          // both faces have identical hole geometry on the finalize page.
-          const holePx = computeHolePunchPx(
+          // Strip the clipPath before dispose so the offscreen canvas
+          // doesn't retain shape state if some future change reuses it.
+          (off as any).clipPath = null;
+          clearTimeout(timer);
+          finish({
+            previewDataUrl,
+            fabricJson: payload,
             lengthMm,
             widthMm,
-            visualGuides,
-            snap.tagOrientation,
-            PREVIEW_MULTIPLIER
-          );
-          punchHoleInPng(rawDataUrl, holePx).then((previewDataUrl) => {
-            clearTimeout(timer);
-            finish({
-              previewDataUrl,
-              fabricJson: payload,
-              lengthMm,
-              widthMm,
-              tagOrientation: snap.tagOrientation,
-              backgroundColor: snap.backgroundColor,
-            });
+            tagOrientation: snap.tagOrientation,
+            backgroundColor: snap.backgroundColor,
           });
         } catch (e) {
           console.warn("[saveDesign] off-screen render failed:", e);
@@ -770,23 +881,9 @@ function buildFinalizeUrl(opts: {
   u.searchParams.set("width", String(opts.input.widthMm));
   if (opts.input.customerId)
     u.searchParams.set("customer_id", opts.input.customerId);
-  // Tag orientation — used by the storefront grommet/thread overlay so
-  // it positions correctly for both vertical (top hole) and horizontal
-  // (right hole) tags.
+  // Tag orientation — kept as informative metadata for the production
+  // team even though the storefront preview no longer reads it.
   u.searchParams.set("orientation", opts.input.tagOrientation);
-  // Hole geometry for the storefront overlay — only meaningful when
-  // visualGuides.hasHolePunch is true, but always emitting keeps the
-  // payload predictable for the Liquid template.
-  if (opts.input.visualGuides && opts.input.visualGuides.hasHolePunch) {
-    u.searchParams.set(
-      "hole_radius_mm",
-      String(opts.input.visualGuides.holePunchRadiusMm)
-    );
-    u.searchParams.set(
-      "hole_offset_mm",
-      String(opts.input.visualGuides.holePunchOffsetFromTopMm)
-    );
-  }
   // Shape blueprint for the production team — pinned to the Shopify
   // cart payload so the printer/cutter receives the exact silhouette.
   u.searchParams.set("shape", opts.input.canvasShape);
