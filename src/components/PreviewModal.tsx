@@ -176,6 +176,7 @@ export function PreviewModal() {
         frontDesign,
         backDesign,
         supportsBackSide: supportsBack,
+        visualGuides: productConfig.visualGuides,
       });
       clearSafety();
       if (!result?.finalizeUrl) {
