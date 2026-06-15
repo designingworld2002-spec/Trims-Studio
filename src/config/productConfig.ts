@@ -128,9 +128,20 @@ export const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
       holePunchOffsetFromTopMm: 8,
     },
     canvasClipShape: "cut-corners",
-    // Hang tags ship with 4 die-cut silhouettes. Star is omitted at
-    // the client's request (not a standard retail tag profile).
-    allowedShapes: ["rectangle", "round-corners", "cut-corners", "oval"],
+    // Hang tags ship with the standard 4 die-cut silhouettes PLUS the
+    // 5 premium shapes. Star is omitted at the client's request (not a
+    // standard retail tag profile).
+    allowedShapes: [
+      "rectangle",
+      "round-corners",
+      "cut-corners",
+      "oval",
+      "scalloped",
+      "pointed-top",
+      "hexagon-pointed",
+      "flared",
+      "mixed-cut-round",
+    ],
     // Tags print front and back.
     supportsBackSide: true,
     // Matte paper grain — soft randomized speckle built from two

@@ -245,6 +245,87 @@ function starPolyPoints(
   return out;
 }
 
+/* ----- Premium hangtag silhouettes (mirror Workspace.tsx geometry) - */
+
+function scallopedPath(w: number, h: number, r: number): string {
+  const rad = Math.max(0, Math.min(r, w / 2, h / 2));
+  return [
+    `M ${rad} 0`,
+    `L ${w - rad} 0`,
+    `A ${rad} ${rad} 0 0 0 ${w} ${rad}`,
+    `L ${w} ${h - rad}`,
+    `A ${rad} ${rad} 0 0 0 ${w - rad} ${h}`,
+    `L ${rad} ${h}`,
+    `A ${rad} ${rad} 0 0 0 0 ${h - rad}`,
+    `L 0 ${rad}`,
+    `A ${rad} ${rad} 0 0 0 ${rad} 0`,
+    "Z",
+  ].join(" ");
+}
+
+function pointedTopPoints(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  pointHeight: number
+): { x: number; y: number }[] {
+  const p = Math.max(0, Math.min(pointHeight, w * 0.5, h * 0.45));
+  return [
+    { x: left + w / 2, y: top },
+    { x: left + w, y: top + p },
+    { x: left + w, y: top + h },
+    { x: left, y: top + h },
+    { x: left, y: top + p },
+  ];
+}
+
+function hexagonPointedPoints(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  pointHeight: number
+): { x: number; y: number }[] {
+  const p = Math.max(0, Math.min(pointHeight, w * 0.5, h * 0.4));
+  return [
+    { x: left + w / 2, y: top },
+    { x: left + w, y: top + p },
+    { x: left + w, y: top + h - p },
+    { x: left + w / 2, y: top + h },
+    { x: left, y: top + h - p },
+    { x: left, y: top + p },
+  ];
+}
+
+function flaredPath(w: number, h: number, waist: number): string {
+  const d = Math.max(0, Math.min(waist, w * 0.35));
+  return [
+    `M 0 0`,
+    `L ${w} 0`,
+    `Q ${w - d} ${h / 2} ${w} ${h}`,
+    `L 0 ${h}`,
+    `Q ${d} ${h / 2} 0 0`,
+    "Z",
+  ].join(" ");
+}
+
+function mixedCutRoundPath(w: number, h: number, corner: number): string {
+  const c = Math.max(0, Math.min(corner, w * 0.4, h * 0.4));
+  return [
+    `M ${c} 0`,
+    `L ${w - c} 0`,
+    `L ${w} ${c}`,
+    `L ${w} ${h - c}`,
+    `A ${c} ${c} 0 0 1 ${w - c} ${h}`,
+    `L ${c} ${h}`,
+    `A ${c} ${c} 0 0 1 0 ${h - c}`,
+    `L 0 ${c}`,
+    `L ${c} 0`,
+    "Z",
+  ].join(" ");
+}
+
 function topEdgeRoundedRectPath(
   w: number,
   h: number,
@@ -350,6 +431,36 @@ function buildShapeClipPath(
         starPolyPoints(left, top, bleedW, bleedH, modifiers.starPoints),
         opts
       );
+    case "scalloped": {
+      const r = Math.max(0, Math.min(radiusPx, bleedW / 2, bleedH / 2));
+      return new fabric.Path(scallopedPath(bleedW, bleedH, r), {
+        left,
+        top,
+        ...opts,
+      });
+    }
+    case "pointed-top":
+      return new fabric.Polygon(
+        pointedTopPoints(left, top, bleedW, bleedH, slantPx),
+        opts
+      );
+    case "hexagon-pointed":
+      return new fabric.Polygon(
+        hexagonPointedPoints(left, top, bleedW, bleedH, slantPx),
+        opts
+      );
+    case "flared":
+      return new fabric.Path(flaredPath(bleedW, bleedH, slantPx), {
+        left,
+        top,
+        ...opts,
+      });
+    case "mixed-cut-round":
+      return new fabric.Path(mixedCutRoundPath(bleedW, bleedH, slantPx), {
+        left,
+        top,
+        ...opts,
+      });
     case "rectangle":
     default:
       return new fabric.Rect({

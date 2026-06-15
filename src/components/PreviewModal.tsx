@@ -638,7 +638,184 @@ function silhouetteCss(
       }
       return { clipPath: `polygon(${out.join(", ")})` };
     }
+    case "scalloped": {
+      const rMm = Math.max(
+        0,
+        Math.min(modifiers.cornerRadiusMm, maxModMm)
+      );
+      return { clipPath: scallopedClipPolygon(rMm, lengthMm, widthMm, pctX, pctY) };
+    }
+    case "pointed-top": {
+      const pMm = Math.max(
+        0,
+        Math.min(modifiers.slantLengthMm, maxModMm)
+      );
+      const pts = [
+        `${pctX(lengthMm / 2).toFixed(3)}% 0%`,
+        `100% ${pctY(pMm).toFixed(3)}%`,
+        `100% 100%`,
+        `0% 100%`,
+        `0% ${pctY(pMm).toFixed(3)}%`,
+      ];
+      return { clipPath: `polygon(${pts.join(", ")})` };
+    }
+    case "hexagon-pointed": {
+      const pMm = Math.max(
+        0,
+        Math.min(modifiers.slantLengthMm, maxModMm)
+      );
+      const pts = [
+        `${pctX(lengthMm / 2).toFixed(3)}% 0%`,
+        `100% ${pctY(pMm).toFixed(3)}%`,
+        `100% ${pctY(widthMm - pMm).toFixed(3)}%`,
+        `${pctX(lengthMm / 2).toFixed(3)}% 100%`,
+        `0% ${pctY(widthMm - pMm).toFixed(3)}%`,
+        `0% ${pctY(pMm).toFixed(3)}%`,
+      ];
+      return { clipPath: `polygon(${pts.join(", ")})` };
+    }
+    case "flared": {
+      const dMm = Math.max(
+        0,
+        Math.min(modifiers.slantLengthMm, lengthMm * 0.35)
+      );
+      return { clipPath: flaredClipPolygon(dMm, lengthMm, widthMm, pctX, pctY) };
+    }
+    case "mixed-cut-round": {
+      const cMm = Math.max(
+        0,
+        Math.min(modifiers.slantLengthMm, maxModMm)
+      );
+      return {
+        clipPath: mixedCutRoundClipPolygon(cMm, lengthMm, widthMm, pctX, pctY),
+      };
+    }
     default:
       return {};
   }
+}
+
+/* ----- Polygon approximations for curved shapes (CSS clip-path) ---- */
+
+function arcPoints(
+  cxMm: number,
+  cyMm: number,
+  rMm: number,
+  startAngle: number,
+  endAngle: number,
+  steps: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number
+): string[] {
+  const out: string[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const a = startAngle + (endAngle - startAngle) * t;
+    const xMm = cxMm + Math.cos(a) * rMm;
+    const yMm = cyMm + Math.sin(a) * rMm;
+    out.push(`${pctX(xMm).toFixed(3)}% ${pctY(yMm).toFixed(3)}%`);
+  }
+  return out;
+}
+
+function scallopedClipPolygon(
+  rMm: number,
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number
+): string {
+  const r = Math.max(0, Math.min(rMm, lengthMm / 2, widthMm / 2));
+  const steps = 8;
+  const pts: string[] = [];
+  pts.push(...arcPoints(0, 0, r, Math.PI / 2, 0, steps, pctX, pctY));
+  pts.push(
+    ...arcPoints(lengthMm, 0, r, Math.PI, Math.PI / 2, steps, pctX, pctY)
+  );
+  pts.push(
+    ...arcPoints(
+      lengthMm,
+      widthMm,
+      r,
+      (3 * Math.PI) / 2,
+      Math.PI,
+      steps,
+      pctX,
+      pctY
+    )
+  );
+  pts.push(
+    ...arcPoints(
+      0,
+      widthMm,
+      r,
+      2 * Math.PI,
+      (3 * Math.PI) / 2,
+      steps,
+      pctX,
+      pctY
+    )
+  );
+  return `polygon(${pts.join(", ")})`;
+}
+
+function flaredClipPolygon(
+  dMm: number,
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number
+): string {
+  const d = Math.max(0, Math.min(dMm, lengthMm * 0.35));
+  const steps = 10;
+  const pts: string[] = ["0% 0%", "100% 0%"];
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const xMm = lengthMm - 2 * (1 - t) * t * d;
+    const yMm = widthMm * t;
+    pts.push(`${pctX(xMm).toFixed(3)}% ${pctY(yMm).toFixed(3)}%`);
+  }
+  pts.push("100% 100%", "0% 100%");
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const xMm = 2 * (1 - t) * t * d;
+    const yMm = widthMm * (1 - t);
+    pts.push(`${pctX(xMm).toFixed(3)}% ${pctY(yMm).toFixed(3)}%`);
+  }
+  return `polygon(${pts.join(", ")})`;
+}
+
+function mixedCutRoundClipPolygon(
+  cMm: number,
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number
+): string {
+  const c = Math.max(0, Math.min(cMm, lengthMm * 0.4, widthMm * 0.4));
+  const steps = 8;
+  const pts: string[] = [
+    `${pctX(c).toFixed(3)}% 0%`,
+    `${pctX(lengthMm - c).toFixed(3)}% 0%`,
+    `100% ${pctY(c).toFixed(3)}%`,
+    `100% ${pctY(widthMm - c).toFixed(3)}%`,
+  ];
+  pts.push(
+    ...arcPoints(
+      lengthMm - c,
+      widthMm - c,
+      c,
+      0,
+      Math.PI / 2,
+      steps,
+      pctX,
+      pctY
+    )
+  );
+  pts.push(`${pctX(c).toFixed(3)}% 100%`);
+  pts.push(
+    ...arcPoints(c, widthMm - c, c, Math.PI / 2, Math.PI, steps, pctX, pctY)
+  );
+  pts.push(`0% ${pctY(c).toFixed(3)}%`);
+  return `polygon(${pts.join(", ")})`;
 }

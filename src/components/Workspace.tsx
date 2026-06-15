@@ -216,6 +216,114 @@ function starPoints(
  *   - oval           → fabric.Ellipse fitting the w×h box
  *   - star           → fabric.Polygon (alternating outer/inner radii)
  */
+/**
+ * SVG path data for a SCALLOPED rectangle — a quarter-circle CUT OUT of
+ * each of the 4 corners (concave arcs, sweep-flag 0). Coords are local
+ * (0..w / 0..h); caller positions via fabric's `left`/`top`.
+ */
+function scallopedPath(w: number, h: number, r: number): string {
+  const rad = Math.max(0, Math.min(r, w / 2, h / 2));
+  return [
+    `M ${rad} 0`,
+    `L ${w - rad} 0`,
+    `A ${rad} ${rad} 0 0 0 ${w} ${rad}`,
+    `L ${w} ${h - rad}`,
+    `A ${rad} ${rad} 0 0 0 ${w - rad} ${h}`,
+    `L ${rad} ${h}`,
+    `A ${rad} ${rad} 0 0 0 0 ${h - rad}`,
+    `L 0 ${rad}`,
+    `A ${rad} ${rad} 0 0 0 ${rad} 0`,
+    "Z",
+  ].join(" ");
+}
+
+/**
+ * Points (absolute canvas coords) for a POINTED-TOP tag — triangular
+ * apex on the top edge, square bottom. `pointHeight` is the depth of
+ * the triangular point in px (clamped to half the shorter axis).
+ */
+function pointedTopPoints(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  pointHeight: number
+): { x: number; y: number }[] {
+  const p = Math.max(0, Math.min(pointHeight, w * 0.5, h * 0.45));
+  return [
+    { x: left + w / 2, y: top }, // apex
+    { x: left + w, y: top + p }, // top-right after the slope
+    { x: left + w, y: top + h }, // bottom-right
+    { x: left, y: top + h }, // bottom-left
+    { x: left, y: top + p }, // top-left after the slope
+  ];
+}
+
+/**
+ * Points for a HEXAGON-POINTED tag — single apex on top AND bottom,
+ * straight vertical sides. `pointHeight` controls the depth of BOTH
+ * apex triangles.
+ */
+function hexagonPointedPoints(
+  left: number,
+  top: number,
+  w: number,
+  h: number,
+  pointHeight: number
+): { x: number; y: number }[] {
+  const p = Math.max(0, Math.min(pointHeight, w * 0.5, h * 0.4));
+  return [
+    { x: left + w / 2, y: top }, // top apex
+    { x: left + w, y: top + p },
+    { x: left + w, y: top + h - p },
+    { x: left + w / 2, y: top + h }, // bottom apex
+    { x: left, y: top + h - p },
+    { x: left, y: top + p },
+  ];
+}
+
+/**
+ * SVG path data for a FLARED tag — top + bottom edges straight, left
+ * and right sides curve INWARD (concave waist). `waist` is the maximum
+ * horizontal inset at the midpoint of each vertical side.
+ */
+function flaredPath(w: number, h: number, waist: number): string {
+  const d = Math.max(0, Math.min(waist, w * 0.35));
+  return [
+    `M 0 0`,
+    `L ${w} 0`,
+    // Right side curves inward via quadratic Bezier with control point
+    // pulled toward the centre of the shape.
+    `Q ${w - d} ${h / 2} ${w} ${h}`,
+    `L 0 ${h}`,
+    // Left side mirrors.
+    `Q ${d} ${h / 2} 0 0`,
+    "Z",
+  ].join(" ");
+}
+
+/**
+ * SVG path data for a MIXED-CUT-ROUND tag — angled cut on the TOP two
+ * corners (like cut-corners) + rounded arc on the BOTTOM two corners
+ * (like round-corners). Single `corner` value drives both so the slant
+ * length matches the bottom radius for a balanced silhouette.
+ */
+function mixedCutRoundPath(w: number, h: number, corner: number): string {
+  const c = Math.max(0, Math.min(corner, w * 0.4, h * 0.4));
+  return [
+    `M ${c} 0`,
+    `L ${w - c} 0`,
+    `L ${w} ${c}`, // angled cut top-right
+    `L ${w} ${h - c}`,
+    `A ${c} ${c} 0 0 1 ${w - c} ${h}`, // rounded bottom-right
+    `L ${c} ${h}`,
+    `A ${c} ${c} 0 0 1 0 ${h - c}`, // rounded bottom-left
+    `L 0 ${c}`,
+    `L ${c} 0`, // angled cut top-left
+    "Z",
+  ].join(" ");
+}
+
 function makeGuideShape(
   shape: CanvasShape,
   left: number,
@@ -288,6 +396,36 @@ function makeGuideShape(
         starPoints(left, top, w, h, opts.starPoints),
         { ...style }
       );
+    case "scalloped": {
+      const r = Math.max(0, Math.min(opts.cornerRadiusPx, w / 2, h / 2));
+      return new fabric.Path(scallopedPath(w, h, r), {
+        left,
+        top,
+        ...style,
+      });
+    }
+    case "pointed-top":
+      return new fabric.Polygon(
+        pointedTopPoints(left, top, w, h, opts.slantPx),
+        { ...style }
+      );
+    case "hexagon-pointed":
+      return new fabric.Polygon(
+        hexagonPointedPoints(left, top, w, h, opts.slantPx),
+        { ...style }
+      );
+    case "flared":
+      return new fabric.Path(flaredPath(w, h, opts.slantPx), {
+        left,
+        top,
+        ...style,
+      });
+    case "mixed-cut-round":
+      return new fabric.Path(mixedCutRoundPath(w, h, opts.slantPx), {
+        left,
+        top,
+        ...style,
+      });
     case "rectangle":
     default:
       return new fabric.Rect({ left, top, width: w, height: h, ...style });
@@ -596,6 +734,57 @@ function buildSafeAreaClip(g: GuideRects): fabric.Object {
           g.modifiers.starPoints
         ),
         opts
+      );
+    case "scalloped": {
+      const r = Math.max(
+        0,
+        Math.min(g.safetyCornerRadiusPx, g.safetyW / 2, g.safetyH / 2)
+      );
+      return new fabric.Path(scallopedPath(g.safetyW, g.safetyH, r), {
+        left: g.safetyLeft,
+        top: g.safetyTop,
+        ...opts,
+      });
+    }
+    case "pointed-top":
+      return new fabric.Polygon(
+        pointedTopPoints(
+          g.safetyLeft,
+          g.safetyTop,
+          g.safetyW,
+          g.safetyH,
+          g.safetySlantPx
+        ),
+        opts
+      );
+    case "hexagon-pointed":
+      return new fabric.Polygon(
+        hexagonPointedPoints(
+          g.safetyLeft,
+          g.safetyTop,
+          g.safetyW,
+          g.safetyH,
+          g.safetySlantPx
+        ),
+        opts
+      );
+    case "flared":
+      return new fabric.Path(
+        flaredPath(g.safetyW, g.safetyH, g.safetySlantPx),
+        {
+          left: g.safetyLeft,
+          top: g.safetyTop,
+          ...opts,
+        }
+      );
+    case "mixed-cut-round":
+      return new fabric.Path(
+        mixedCutRoundPath(g.safetyW, g.safetyH, g.safetySlantPx),
+        {
+          left: g.safetyLeft,
+          top: g.safetyTop,
+          ...opts,
+        }
       );
     case "rectangle":
     default:
@@ -1658,6 +1847,31 @@ function BleedTextureOverlay({
       clipPath = `polygon(${pts})`;
       break;
     }
+    case "scalloped": {
+      // CSS `clip-path: path()` mirrors the fabric SVG path exactly.
+      clipPath = `path('${scallopedPath(bleedW, bleedH, radiusPx)}')`;
+      break;
+    }
+    case "pointed-top": {
+      const pts = pointedTopPoints(0, 0, bleedW, bleedH, slantPx)
+        .map((p) => `${p.x.toFixed(2)}px ${p.y.toFixed(2)}px`)
+        .join(", ");
+      clipPath = `polygon(${pts})`;
+      break;
+    }
+    case "hexagon-pointed": {
+      const pts = hexagonPointedPoints(0, 0, bleedW, bleedH, slantPx)
+        .map((p) => `${p.x.toFixed(2)}px ${p.y.toFixed(2)}px`)
+        .join(", ");
+      clipPath = `polygon(${pts})`;
+      break;
+    }
+    case "flared":
+      clipPath = `path('${flaredPath(bleedW, bleedH, slantPx)}')`;
+      break;
+    case "mixed-cut-round":
+      clipPath = `path('${mixedCutRoundPath(bleedW, bleedH, slantPx)}')`;
+      break;
     case "rectangle":
     default:
       break;
@@ -1809,6 +2023,18 @@ function CanvasLabels({
     modifierLabel = `Slant: ${v} mm`;
   } else if (shape === "star") {
     modifierLabel = `${modifiers.starPoints} pts`;
+  } else if (shape === "scalloped") {
+    const v = Math.min(modifiers.cornerRadiusMm, maxModifierMm);
+    modifierLabel = `Scallop: ${v} mm`;
+  } else if (shape === "pointed-top" || shape === "hexagon-pointed") {
+    const v = Math.min(modifiers.slantLengthMm, maxModifierMm);
+    modifierLabel = `Point: ${v} mm`;
+  } else if (shape === "flared") {
+    const v = Math.min(modifiers.slantLengthMm, maxModifierMm);
+    modifierLabel = `Waist: ${v} mm`;
+  } else if (shape === "mixed-cut-round") {
+    const v = Math.min(modifiers.slantLengthMm, maxModifierMm);
+    modifierLabel = `Corner: ${v} mm`;
   }
 
   return (

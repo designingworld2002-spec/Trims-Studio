@@ -18,7 +18,18 @@ export type CanvasShape =
   | "round-corners"
   | "cut-corners"
   | "oval"
-  | "star";
+  | "star"
+  // ---- Premium hangtag silhouettes ----
+  /** All 4 corners have a quarter-circle CUT OUT (concave arcs). */
+  | "scalloped"
+  /** Triangular apex at the top; bottom is a square rectangle. */
+  | "pointed-top"
+  /** 6-sided polygon — single apex on top AND bottom, straight sides. */
+  | "hexagon-pointed"
+  /** Top + bottom straight; left + right curve inward (waist / bell). */
+  | "flared"
+  /** Angled cut top corners + rounded arc bottom corners. */
+  | "mixed-cut-round";
 
 export interface ShapeModifiers {
   /** Round-corners: corner radius in mm. */

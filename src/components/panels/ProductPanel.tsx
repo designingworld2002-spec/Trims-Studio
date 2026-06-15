@@ -250,6 +250,67 @@ const SHAPES: ShapeTile[] = [
       </svg>
     ),
   },
+  // ---- Premium hangtag silhouettes ----
+  {
+    key: "scalloped",
+    label: "Scalloped",
+    icon: (a) => (
+      <svg viewBox="0 0 32 32" className="w-7 h-7" aria-hidden>
+        <path
+          d="M 11 6 L 21 6 A 5 5 0 0 0 26 11 L 26 21 A 5 5 0 0 0 21 26 L 11 26 A 5 5 0 0 0 6 21 L 6 11 A 5 5 0 0 0 11 6 Z"
+          fill="none" stroke={a ? "currentColor" : "#94a3b8"} strokeWidth="1.6"
+        />
+      </svg>
+    ),
+  },
+  {
+    key: "pointed-top",
+    label: "Pointed top",
+    icon: (a) => (
+      <svg viewBox="0 0 32 32" className="w-7 h-7" aria-hidden>
+        <polygon
+          points="16,5 26,12 26,27 6,27 6,12"
+          fill="none" stroke={a ? "currentColor" : "#94a3b8"} strokeWidth="1.6"
+        />
+      </svg>
+    ),
+  },
+  {
+    key: "hexagon-pointed",
+    label: "Hex point",
+    icon: (a) => (
+      <svg viewBox="0 0 32 32" className="w-7 h-7" aria-hidden>
+        <polygon
+          points="16,4 26,11 26,21 16,28 6,21 6,11"
+          fill="none" stroke={a ? "currentColor" : "#94a3b8"} strokeWidth="1.6"
+        />
+      </svg>
+    ),
+  },
+  {
+    key: "flared",
+    label: "Flared",
+    icon: (a) => (
+      <svg viewBox="0 0 32 32" className="w-7 h-7" aria-hidden>
+        <path
+          d="M 6 6 L 26 6 Q 22 16 26 26 L 6 26 Q 10 16 6 6 Z"
+          fill="none" stroke={a ? "currentColor" : "#94a3b8"} strokeWidth="1.6"
+        />
+      </svg>
+    ),
+  },
+  {
+    key: "mixed-cut-round",
+    label: "Cut + round",
+    icon: (a) => (
+      <svg viewBox="0 0 32 32" className="w-7 h-7" aria-hidden>
+        <path
+          d="M 11 6 L 21 6 L 26 11 L 26 21 A 5 5 0 0 1 21 26 L 11 26 A 5 5 0 0 1 6 21 L 6 11 L 11 6 Z"
+          fill="none" stroke={a ? "currentColor" : "#94a3b8"} strokeWidth="1.6"
+        />
+      </svg>
+    ),
+  },
 ];
 
 function ShapeSelection() {
@@ -341,6 +402,42 @@ function ShapeSelection() {
           step={1}
           suffix=""
           onChange={(v) => updateModifiers({ starPoints: v })}
+        />
+      )}
+      {shape === "scalloped" && (
+        <ModifierSlider
+          label="Scallop radius"
+          value={radius}
+          max={maxModifier}
+          onChange={(v) => updateModifiers({ cornerRadiusMm: v })}
+        />
+      )}
+      {(shape === "pointed-top" || shape === "hexagon-pointed") && (
+        <ModifierSlider
+          label="Point height"
+          value={slant}
+          max={maxModifier}
+          onChange={(v) => updateModifiers({ slantLengthMm: v })}
+        />
+      )}
+      {shape === "flared" && (
+        <ModifierSlider
+          label="Waist depth"
+          value={slant}
+          max={maxModifier}
+          onChange={(v) => updateModifiers({ slantLengthMm: v })}
+        />
+      )}
+      {shape === "mixed-cut-round" && (
+        <ModifierSlider
+          label="Corner size"
+          value={slant}
+          max={maxModifier}
+          // Drive both the top slant AND the bottom corner radius from a
+          // single slider so the silhouette stays balanced.
+          onChange={(v) =>
+            updateModifiers({ slantLengthMm: v, cornerRadiusMm: v })
+          }
         />
       )}
 
