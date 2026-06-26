@@ -14,7 +14,7 @@ export function TopBar() {
   const setPreviewFlipOpen = useCanvasStore((s) => s.setPreviewFlipOpen);
 
   return (
-    <header className="h-14 bg-white border-b border-vp-border flex items-center px-2 sm:px-4 shrink-0 gap-1 z-30 relative">
+    <header className="h-14 bg-white border-b border-gray-100 shadow-sm flex items-center px-2 sm:px-4 shrink-0 gap-1 z-30 relative">
       {/* Logo — animated rolling sewing-button. Text label hides on small screens. */}
       <div className="flex items-center gap-2.5 sm:pr-5 sm:border-r sm:border-vp-border shrink-0">
         <StudioLogo size={32} />

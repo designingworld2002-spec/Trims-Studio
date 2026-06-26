@@ -54,7 +54,7 @@ export function TextPanel() {
 
       <button
         onClick={addText}
-        className="w-full h-11 rounded-md bg-vp-blue hover:bg-vp-blue-hover text-white text-sm font-medium"
+        className="w-full h-11 rounded-xl bg-vp-blue hover:bg-vp-blue-hover text-white text-sm font-semibold shadow-sm transition-colors"
       >
         + New text field
       </button>

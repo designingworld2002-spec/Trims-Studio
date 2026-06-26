@@ -245,10 +245,15 @@ export function PreviewModal() {
                   transition: supportsBack
                     ? "transform 600ms cubic-bezier(0.4, 0.0, 0.2, 1)"
                     : "none",
-                  transform:
-                    effectiveSide === "front"
-                      ? "rotateY(0deg)"
-                      : "rotateY(180deg)",
+                  // Vertical tags hinge left↔right (rotateY); horizontal
+                  // tags hinge top↔bottom (rotateX) — pivot follows the
+                  // tag's hang edge.
+                  transform: (() => {
+                    const axis = lengthMm > widthMm ? "X" : "Y";
+                    return effectiveSide === "front"
+                      ? `rotate${axis}(0deg)`
+                      : `rotate${axis}(180deg)`;
+                  })(),
                 }}
               >
                 <PreviewFace
@@ -265,6 +270,12 @@ export function PreviewModal() {
                   starPoints={shapeModifiersStore.starPoints}
                   cornersMode={shapeModifiersStore.cornersMode}
                   tagOrientation={tagOrientation}
+                  holePct={holePunchPct(
+                    lengthMm,
+                    widthMm,
+                    productConfig.visualGuides,
+                    tagOrientation
+                  )}
                 />
                 {supportsBack && (
                   <PreviewFace
@@ -284,6 +295,12 @@ export function PreviewModal() {
                     tagOrientation={
                       backDesign?.tagOrientation ?? tagOrientation
                     }
+                    holePct={holePunchPct(
+                      backDesign?.lengthMm ?? lengthMm,
+                      backDesign?.widthMm ?? widthMm,
+                      productConfig.visualGuides,
+                      backDesign?.tagOrientation ?? tagOrientation
+                    )}
                   />
                 )}
               </div>
@@ -411,6 +428,7 @@ function PreviewFace({
   starPoints: nStarPoints,
   cornersMode,
   tagOrientation,
+  holePct,
 }: {
   url: string | null;
   label: string;
@@ -424,6 +442,7 @@ function PreviewFace({
   starPoints: number;
   cornersMode: "top" | "all";
   tagOrientation: "vertical" | "horizontal";
+  holePct: { cx: number; cy: number; r: number } | null;
 }) {
   const { clipPath, borderRadius } = silhouetteCss(
     shape,
@@ -437,13 +456,14 @@ function PreviewFace({
     lengthMm,
     widthMm
   );
+  const backAxis = lengthMm > widthMm ? "X" : "Y";
   return (
     <div
       aria-label={label}
       className="absolute inset-0"
       style={{
         backfaceVisibility: "hidden",
-        transform: isBack ? "rotateY(180deg)" : undefined,
+        transform: isBack ? `rotate${backAxis}(180deg)` : undefined,
       }}
     >
       <div
@@ -467,9 +487,56 @@ function PreviewFace({
             No design yet
           </div>
         )}
+        {holePct && (
+          <div
+            aria-hidden
+            className="absolute pointer-events-none rounded-full"
+            style={{
+              left: `${holePct.cx}%`,
+              top: `${holePct.cy}%`,
+              width: `${holePct.r * 2}%`,
+              aspectRatio: "1 / 1",
+              transform: "translate(-50%, -50%)",
+              background: "#ffffff",
+              boxShadow:
+                "inset 0 1px 3px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.08)",
+            }}
+          />
+        )}
       </div>
     </div>
   );
+}
+
+/** % coords of the hole punch within a face — see FlipPreviewModal. */
+function holePunchPct(
+  lengthMm: number,
+  widthMm: number,
+  visualGuides: {
+    hasHolePunch: boolean;
+    holePunchRadiusMm: number;
+    holePunchOffsetFromTopMm: number;
+  },
+  tagOrientation: "vertical" | "horizontal"
+): { cx: number; cy: number; r: number } | null {
+  if (!visualGuides.hasHolePunch || visualGuides.holePunchRadiusMm <= 0) {
+    return null;
+  }
+  const off = visualGuides.holePunchOffsetFromTopMm;
+  const rMm = visualGuides.holePunchRadiusMm;
+  const r = (rMm / Math.max(1, lengthMm)) * 100;
+  if (tagOrientation === "horizontal") {
+    return {
+      cx: ((lengthMm - off) / Math.max(1, lengthMm)) * 100,
+      cy: 50,
+      r,
+    };
+  }
+  return {
+    cx: 50,
+    cy: (off / Math.max(1, widthMm)) * 100,
+    r,
+  };
 }
 
 /* ----------------------- snapshot helpers ----------------------- */
@@ -588,23 +655,26 @@ function silhouetteCss(
   const isHorizontal = tagOrientation === "horizontal";
   const cornersMode = modifiers.cornersMode;
   const maxModMm = Math.max(1, Math.min(lengthMm, widthMm)) * 0.4;
-  const pctX = (mm: number) =>
-    (Math.max(0, Math.min(mm, maxModMm)) / Math.max(1, lengthMm)) * 100;
-  const pctY = (mm: number) =>
-    (Math.max(0, Math.min(mm, maxModMm)) / Math.max(1, widthMm)) * 100;
+  // `pctX` / `pctY` accept arbitrary coordinate values (not just
+  // shape modifiers). Modifier values get clamped explicitly at each
+  // call site via `Math.min(value, maxModMm)`.
+  const pctX = (mm: number) => (mm / Math.max(1, lengthMm)) * 100;
+  const pctY = (mm: number) => (mm / Math.max(1, widthMm)) * 100;
 
   switch (shape) {
     case "round-corners": {
-      const rx = pctX(modifiers.cornerRadiusMm).toFixed(2);
-      const ry = pctY(modifiers.cornerRadiusMm).toFixed(2);
+      const clampedR = Math.max(0, Math.min(modifiers.cornerRadiusMm, maxModMm));
+      const rx = pctX(clampedR).toFixed(2);
+      const ry = pctY(clampedR).toFixed(2);
       if (cornersMode === "all") return { borderRadius: `${rx}% / ${ry}%` };
       if (isHorizontal)
         return { borderRadius: `0 ${rx}% ${rx}% 0 / 0 ${ry}% ${ry}% 0` };
       return { borderRadius: `${rx}% ${rx}% 0 0 / ${ry}% ${ry}% 0 0` };
     }
     case "cut-corners": {
-      const cx = pctX(modifiers.slantLengthMm).toFixed(2);
-      const cy = pctY(modifiers.slantLengthMm).toFixed(2);
+      const clampedS = Math.max(0, Math.min(modifiers.slantLengthMm, maxModMm));
+      const cx = pctX(clampedS).toFixed(2);
+      const cy = pctY(clampedS).toFixed(2);
       if (cornersMode === "all") {
         return {
           clipPath: `polygon(${cx}% 0, ${100 - +cx}% 0, 100% ${cy}%, 100% ${100 - +cy}%, ${100 - +cx}% 100%, ${cx}% 100%, 0 ${100 - +cy}%, 0 ${cy}%)`,
@@ -650,6 +720,16 @@ function silhouetteCss(
         0,
         Math.min(modifiers.slantLengthMm, maxModMm)
       );
+      if (isHorizontal) {
+        const pts = [
+          `100% ${pctY(widthMm / 2).toFixed(3)}%`,
+          `${pctX(lengthMm - pMm).toFixed(3)}% 100%`,
+          `0% 100%`,
+          `0% 0%`,
+          `${pctX(lengthMm - pMm).toFixed(3)}% 0%`,
+        ];
+        return { clipPath: `polygon(${pts.join(", ")})` };
+      }
       const pts = [
         `${pctX(lengthMm / 2).toFixed(3)}% 0%`,
         `100% ${pctY(pMm).toFixed(3)}%`,
@@ -664,6 +744,17 @@ function silhouetteCss(
         0,
         Math.min(modifiers.slantLengthMm, maxModMm)
       );
+      if (isHorizontal) {
+        const pts = [
+          `100% ${pctY(widthMm / 2).toFixed(3)}%`,
+          `${pctX(lengthMm - pMm).toFixed(3)}% 100%`,
+          `${pctX(pMm).toFixed(3)}% 100%`,
+          `0% ${pctY(widthMm / 2).toFixed(3)}%`,
+          `${pctX(pMm).toFixed(3)}% 0%`,
+          `${pctX(lengthMm - pMm).toFixed(3)}% 0%`,
+        ];
+        return { clipPath: `polygon(${pts.join(", ")})` };
+      }
       const pts = [
         `${pctX(lengthMm / 2).toFixed(3)}% 0%`,
         `100% ${pctY(pMm).toFixed(3)}%`,
@@ -675,11 +766,11 @@ function silhouetteCss(
       return { clipPath: `polygon(${pts.join(", ")})` };
     }
     case "flared": {
-      const dMm = Math.max(
-        0,
-        Math.min(modifiers.slantLengthMm, lengthMm * 0.35)
-      );
-      return { clipPath: flaredClipPolygon(dMm, lengthMm, widthMm, pctX, pctY) };
+      const longEdgeMm = isHorizontal ? widthMm : lengthMm;
+      const dMm = Math.max(0, Math.min(modifiers.slantLengthMm, longEdgeMm * 0.35));
+      return {
+        clipPath: flaredClipPolygon(dMm, lengthMm, widthMm, pctX, pctY, isHorizontal),
+      };
     }
     case "mixed-cut-round": {
       const cMm = Math.max(
@@ -687,12 +778,338 @@ function silhouetteCss(
         Math.min(modifiers.slantLengthMm, maxModMm)
       );
       return {
-        clipPath: mixedCutRoundClipPolygon(cMm, lengthMm, widthMm, pctX, pctY),
+        clipPath: mixedCutRoundClipPolygon(
+          cMm, lengthMm, widthMm, pctX, pctY, isHorizontal
+        ),
+      };
+    }
+    case "boutique": {
+      const shortEdgeMm = isHorizontal ? lengthMm : widthMm;
+      const dMm = Math.max(0, Math.min(modifiers.slantLengthMm, shortEdgeMm * 0.45));
+      return {
+        clipPath: boutiqueClipPolygon(
+          dMm, lengthMm, widthMm, pctX, pctY, isHorizontal
+        ),
+      };
+    }
+    case "arch":
+      return {
+        clipPath: archClipPolygon(lengthMm, widthMm, pctX, pctY, isHorizontal),
+      };
+    case "barrel": {
+      const shortEdgeMm = isHorizontal ? lengthMm : widthMm;
+      const bMm = Math.max(0, Math.min(modifiers.slantLengthMm, shortEdgeMm * 0.45));
+      return {
+        clipPath: barrelClipPolygon(
+          bMm, lengthMm, widthMm, pctX, pctY, isHorizontal
+        ),
+      };
+    }
+    case "pill":
+      return { clipPath: pillClipPolygon(lengthMm, widthMm, pctX, pctY) };
+    case "ticket": {
+      const nMm = Math.max(0, Math.min(modifiers.cornerRadiusMm, maxModMm));
+      return {
+        clipPath: ticketClipPolygon(nMm, lengthMm, widthMm, pctX, pctY),
       };
     }
     default:
       return {};
   }
+}
+
+/* ----- Polygon approximations for the extended premium shapes ----- */
+
+function boutiqueClipPolygon(
+  depthMm: number,
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number,
+  isHorizontal: boolean
+): string {
+  const steps = 12;
+  const pts: string[] = [];
+  const cubic = (
+    p0x: number, p0y: number,
+    p1x: number, p1y: number,
+    p2x: number, p2y: number,
+    p3x: number, p3y: number,
+    t: number
+  ) => {
+    const it = 1 - t;
+    return [
+      it*it*it*p0x + 3*it*it*t*p1x + 3*it*t*t*p2x + t*t*t*p3x,
+      it*it*it*p0y + 3*it*it*t*p1y + 3*it*t*t*p2y + t*t*t*p3y,
+    ];
+  };
+  if (isHorizontal) {
+    const d = Math.max(0, Math.min(depthMm, lengthMm * 0.45));
+    pts.push(`0% 0%`, `${pctX(lengthMm - d).toFixed(3)}% 0%`);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const [x, y] = cubic(
+        lengthMm - d, 0,
+        lengthMm - d, widthMm * 0.15,
+        lengthMm, widthMm * 0.3,
+        lengthMm, widthMm / 2,
+        t
+      );
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const [x, y] = cubic(
+        lengthMm, widthMm / 2,
+        lengthMm, widthMm * 0.7,
+        lengthMm - d, widthMm * 0.85,
+        lengthMm - d, widthMm,
+        t
+      );
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+    pts.push(`0% 100%`);
+    return `polygon(${pts.join(", ")})`;
+  }
+  const d = Math.max(0, Math.min(depthMm, widthMm * 0.45));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = cubic(
+      0, d, lengthMm * 0.15, d, lengthMm * 0.3, 0, lengthMm / 2, 0, t
+    );
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = cubic(
+      lengthMm / 2, 0, lengthMm * 0.7, 0, lengthMm * 0.85, d, lengthMm, d, t
+    );
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  pts.push(`100% 100%`, `0% 100%`);
+  return `polygon(${pts.join(", ")})`;
+}
+
+function archClipPolygon(
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number,
+  isHorizontal: boolean
+): string {
+  const steps = 16;
+  const pts: string[] = [];
+  if (isHorizontal) {
+    const r = widthMm / 2;
+    const arcW = Math.min(r, lengthMm * 0.5);
+    pts.push(`0% 0%`, `${pctX(lengthMm - arcW).toFixed(3)}% 0%`);
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const theta = -Math.PI / 2 + Math.PI * t;
+      const x = lengthMm - arcW + Math.cos(theta) * arcW;
+      const y = widthMm / 2 + Math.sin(theta) * r;
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+    pts.push(`0% 100%`);
+    return `polygon(${pts.join(", ")})`;
+  }
+  const r = lengthMm / 2;
+  const arcH = Math.min(r, widthMm * 0.5);
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const theta = Math.PI - Math.PI * t;
+    const x = lengthMm / 2 + Math.cos(theta) * r;
+    const y = arcH - Math.sin(theta) * arcH;
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  pts.push(`100% 100%`, `0% 100%`);
+  return `polygon(${pts.join(", ")})`;
+}
+
+function barrelClipPolygon(
+  bulgeMm: number,
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number,
+  isHorizontal: boolean
+): string {
+  const steps = 12;
+  const pts: string[] = [];
+  const sampleCubic = (
+    p0x: number, p0y: number,
+    p1x: number, p1y: number,
+    p2x: number, p2y: number,
+    p3x: number, p3y: number,
+    t: number
+  ): [number, number] => {
+    const it = 1 - t;
+    return [
+      it * it * it * p0x + 3 * it * it * t * p1x + 3 * it * t * t * p2x + t * t * t * p3x,
+      it * it * it * p0y + 3 * it * it * t * p1y + 3 * it * t * t * p2y + t * t * t * p3y,
+    ];
+  };
+  if (isHorizontal) {
+    const d = Math.max(0, Math.min(bulgeMm, lengthMm * 0.45));
+    const k = d / 3;
+    pts.push(`${pctX(d).toFixed(3)}% 0%`, `${pctX(lengthMm - d).toFixed(3)}% 0%`);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const [x, y] = sampleCubic(
+        lengthMm - d, 0,
+        lengthMm + k, 0,
+        lengthMm + k, widthMm,
+        lengthMm - d, widthMm,
+        t
+      );
+      pts.push(
+        `${pctX(Math.min(lengthMm, x)).toFixed(3)}% ${pctY(y).toFixed(3)}%`
+      );
+    }
+    pts.push(`${pctX(d).toFixed(3)}% 100%`);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const [x, y] = sampleCubic(
+        d, widthMm,
+        -k, widthMm,
+        -k, 0,
+        d, 0,
+        t
+      );
+      pts.push(
+        `${pctX(Math.max(0, x)).toFixed(3)}% ${pctY(y).toFixed(3)}%`
+      );
+    }
+    return `polygon(${pts.join(", ")})`;
+  }
+  const d = Math.max(0, Math.min(bulgeMm, widthMm * 0.45));
+  const k = d / 3;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = sampleCubic(
+      0, d,
+      0, -k,
+      lengthMm, -k,
+      lengthMm, d,
+      t
+    );
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(Math.max(0, y)).toFixed(3)}%`);
+  }
+  pts.push(`100% ${pctY(widthMm - d).toFixed(3)}%`);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = sampleCubic(
+      lengthMm, widthMm - d,
+      lengthMm, widthMm + k,
+      0, widthMm + k,
+      0, widthMm - d,
+      t
+    );
+    pts.push(
+      `${pctX(x).toFixed(3)}% ${pctY(Math.min(widthMm, y)).toFixed(3)}%`
+    );
+  }
+  return `polygon(${pts.join(", ")})`;
+}
+
+function pillClipPolygon(
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number
+): string {
+  const steps = 12;
+  const pts: string[] = [];
+  if (widthMm >= lengthMm) {
+    const r = lengthMm / 2;
+    for (let i = 0; i <= steps; i++) {
+      const theta = Math.PI - Math.PI * (i / steps);
+      const x = lengthMm / 2 + Math.cos(theta) * r;
+      const y = r - Math.sin(theta) * r;
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+    for (let i = 1; i <= steps; i++) {
+      const theta = -Math.PI * (i / steps);
+      const x = lengthMm / 2 + Math.cos(theta) * r;
+      const y = widthMm - r - Math.sin(theta) * r;
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+  } else {
+    const r = widthMm / 2;
+    pts.push(`${pctX(r).toFixed(3)}% 0%`);
+    pts.push(`${pctX(lengthMm - r).toFixed(3)}% 0%`);
+    for (let i = 0; i <= steps; i++) {
+      const theta = -Math.PI / 2 + Math.PI * (i / steps);
+      const x = lengthMm - r + Math.cos(theta) * r;
+      const y = widthMm / 2 + Math.sin(theta) * r;
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+    pts.push(`${pctX(r).toFixed(3)}% 100%`);
+    for (let i = 0; i <= steps; i++) {
+      const theta = Math.PI / 2 + Math.PI * (i / steps);
+      const x = r + Math.cos(theta) * r;
+      const y = widthMm / 2 + Math.sin(theta) * r;
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+  }
+  return `polygon(${pts.join(", ")})`;
+}
+
+function ticketClipPolygon(
+  notchMm: number,
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number
+): string {
+  const r = Math.max(0, Math.min(notchMm, lengthMm * 0.4, widthMm * 0.4));
+  const steps = 6;
+  const pts: string[] = [];
+  const quad = (
+    p0x: number, p0y: number,
+    p1x: number, p1y: number,
+    p2x: number, p2y: number,
+    t: number
+  ) => {
+    const it = 1 - t;
+    return [
+      it * it * p0x + 2 * it * t * p1x + t * t * p2x,
+      it * it * p0y + 2 * it * t * p1y + t * t * p2y,
+    ];
+  };
+  pts.push(`${pctX(r).toFixed(3)}% 0%`);
+  pts.push(`${pctX(lengthMm - r).toFixed(3)}% 0%`);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = quad(
+      lengthMm - r, 0, lengthMm - r, r, lengthMm, r, t
+    );
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  pts.push(`100% ${pctY(widthMm - r).toFixed(3)}%`);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = quad(
+      lengthMm, widthMm - r,
+      lengthMm - r, widthMm - r,
+      lengthMm - r, widthMm,
+      t
+    );
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  pts.push(`${pctX(r).toFixed(3)}% 100%`);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = quad(r, widthMm, r, widthMm - r, 0, widthMm - r, t);
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  pts.push(`0% ${pctY(r).toFixed(3)}%`);
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const [x, y] = quad(0, r, r, r, r, 0, t);
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  return `polygon(${pts.join(", ")})`;
 }
 
 /* ----- Polygon approximations for curved shapes (CSS clip-path) ---- */
@@ -764,10 +1181,30 @@ function flaredClipPolygon(
   lengthMm: number,
   widthMm: number,
   pctX: (mm: number) => number,
-  pctY: (mm: number) => number
+  pctY: (mm: number) => number,
+  isHorizontal: boolean
 ): string {
-  const d = Math.max(0, Math.min(dMm, lengthMm * 0.35));
   const steps = 10;
+  if (isHorizontal) {
+    const d = Math.max(0, Math.min(dMm, widthMm * 0.35));
+    const pts: string[] = ["0% 0%"];
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const xMm = lengthMm * t;
+      const yMm = 2 * (1 - t) * t * d;
+      pts.push(`${pctX(xMm).toFixed(3)}% ${pctY(yMm).toFixed(3)}%`);
+    }
+    pts.push("100% 0%", "100% 100%");
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const xMm = lengthMm * (1 - t);
+      const yMm = widthMm - 2 * (1 - t) * t * d;
+      pts.push(`${pctX(xMm).toFixed(3)}% ${pctY(yMm).toFixed(3)}%`);
+    }
+    pts.push("0% 100%");
+    return `polygon(${pts.join(", ")})`;
+  }
+  const d = Math.max(0, Math.min(dMm, lengthMm * 0.35));
   const pts: string[] = ["0% 0%", "100% 0%"];
   for (let i = 1; i < steps; i++) {
     const t = i / steps;
@@ -790,10 +1227,26 @@ function mixedCutRoundClipPolygon(
   lengthMm: number,
   widthMm: number,
   pctX: (mm: number) => number,
-  pctY: (mm: number) => number
+  pctY: (mm: number) => number,
+  isHorizontal: boolean
 ): string {
   const c = Math.max(0, Math.min(cMm, lengthMm * 0.4, widthMm * 0.4));
   const steps = 8;
+  if (isHorizontal) {
+    const pts: string[] = [];
+    pts.push(...arcPoints(c, c, c, Math.PI, 1.5 * Math.PI, steps, pctX, pctY));
+    pts.push(
+      `${pctX(lengthMm - c).toFixed(3)}% 0%`,
+      `100% ${pctY(c).toFixed(3)}%`,
+      `100% ${pctY(widthMm - c).toFixed(3)}%`,
+      `${pctX(lengthMm - c).toFixed(3)}% 100%`,
+      `${pctX(c).toFixed(3)}% 100%`
+    );
+    pts.push(
+      ...arcPoints(c, widthMm - c, c, Math.PI / 2, Math.PI, steps, pctX, pctY)
+    );
+    return `polygon(${pts.join(", ")})`;
+  }
   const pts: string[] = [
     `${pctX(c).toFixed(3)}% 0%`,
     `${pctX(lengthMm - c).toFixed(3)}% 0%`,

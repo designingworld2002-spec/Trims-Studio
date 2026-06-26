@@ -24,21 +24,7 @@ export function BottomBar() {
   };
 
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white rounded-full shadow-vp-pop border border-vp-border h-10 flex items-center px-1 gap-0.5 z-10">
-      <button
-        aria-label="Zoom out"
-        onClick={stepDown}
-        className="w-8 h-8 rounded-full hover:bg-vp-rail flex items-center justify-center"
-      >
-        <Minus className="w-4 h-4" />
-      </button>
-      <button
-        onClick={reset}
-        className="min-w-14 px-2 h-8 rounded-full hover:bg-vp-rail text-xs font-medium"
-        title="Reset zoom"
-      >
-        {Math.round(zoom * 100)}%
-      </button>
+    <div className="absolute top-1/2 -translate-y-1/2 right-4 bg-white rounded-full shadow-vp-pop border border-vp-border w-10 flex flex-col items-center py-1 gap-0.5 z-10">
       <button
         aria-label="Zoom in"
         onClick={stepUp}
@@ -46,10 +32,24 @@ export function BottomBar() {
       >
         <Plus className="w-4 h-4" />
       </button>
-      <div className="w-px h-5 bg-vp-border mx-1" />
+      <button
+        onClick={reset}
+        className="min-w-8 px-1 h-8 rounded-full hover:bg-vp-rail text-[10px] font-medium leading-none"
+        title="Reset zoom"
+      >
+        {Math.round(zoom * 100)}%
+      </button>
+      <button
+        aria-label="Zoom out"
+        onClick={stepDown}
+        className="w-8 h-8 rounded-full hover:bg-vp-rail flex items-center justify-center"
+      >
+        <Minus className="w-4 h-4" />
+      </button>
+      <div className="h-px w-5 bg-vp-border my-1" />
       <SmartPopover
-        side="top"
-        align="end"
+        side="left"
+        align="center"
         className="w-60 p-2"
         trigger={
           <button

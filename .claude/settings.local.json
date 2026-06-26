@@ -19,7 +19,8 @@
       "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:5173/)",
       "Bash(curl -s http://localhost:5173/)",
       "Bash(node -e ' *)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(ls \"D:/My Personal Studio/vp-clone-studio/\" 2>&1 | head -30)"
     ]
   }
 }

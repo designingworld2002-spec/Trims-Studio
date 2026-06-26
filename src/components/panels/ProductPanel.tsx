@@ -311,6 +311,67 @@ const SHAPES: ShapeTile[] = [
       </svg>
     ),
   },
+  // ---- Extended premium silhouettes ----
+  {
+    key: "boutique",
+    label: "Boutique",
+    icon: (a) => (
+      <svg viewBox="0 0 32 32" className="w-7 h-7" aria-hidden>
+        <path
+          d="M 6 11 C 9 11 11 6 16 6 C 21 6 23 11 26 11 L 26 26 L 6 26 Z"
+          fill="none" stroke={a ? "currentColor" : "#94a3b8"} strokeWidth="1.6"
+        />
+      </svg>
+    ),
+  },
+  {
+    key: "arch",
+    label: "Arch",
+    icon: (a) => (
+      <svg viewBox="0 0 32 32" className="w-7 h-7" aria-hidden>
+        <path
+          d="M 6 14 A 10 8 0 0 1 26 14 L 26 26 L 6 26 Z"
+          fill="none" stroke={a ? "currentColor" : "#94a3b8"} strokeWidth="1.6"
+        />
+      </svg>
+    ),
+  },
+  {
+    key: "barrel",
+    label: "Barrel",
+    icon: (a) => (
+      <svg viewBox="0 0 32 32" className="w-7 h-7" aria-hidden>
+        <path
+          d="M 6 11 Q 16 5 26 11 L 26 21 Q 16 27 6 21 Z"
+          fill="none" stroke={a ? "currentColor" : "#94a3b8"} strokeWidth="1.6"
+        />
+      </svg>
+    ),
+  },
+  {
+    key: "pill",
+    label: "Pill",
+    icon: (a) => (
+      <svg viewBox="0 0 32 32" className="w-7 h-7" aria-hidden>
+        <path
+          d="M 6 12 A 6 6 0 0 1 26 12 L 26 20 A 6 6 0 0 1 6 20 Z"
+          fill="none" stroke={a ? "currentColor" : "#94a3b8"} strokeWidth="1.6"
+        />
+      </svg>
+    ),
+  },
+  {
+    key: "ticket",
+    label: "Ticket",
+    icon: (a) => (
+      <svg viewBox="0 0 32 32" className="w-7 h-7" aria-hidden>
+        <path
+          d="M 10 6 L 22 6 Q 22 10 26 10 L 26 22 Q 22 22 22 26 L 10 26 Q 10 22 6 22 L 6 10 Q 10 10 10 6 Z"
+          fill="none" stroke={a ? "currentColor" : "#94a3b8"} strokeWidth="1.6"
+        />
+      </svg>
+    ),
+  },
 ];
 
 function ShapeSelection() {
@@ -345,12 +406,7 @@ function ShapeSelection() {
         Shape
       </label>
 
-      <div
-        className="grid gap-1.5"
-        style={{
-          gridTemplateColumns: `repeat(${visibleShapes.length}, minmax(0, 1fr))`,
-        }}
-      >
+      <div className="grid grid-cols-4 gap-1.5">
         {visibleShapes.map((t) => {
           const active = shape === t.key;
           return (
@@ -361,15 +417,15 @@ function ShapeSelection() {
               aria-pressed={active}
               title={t.label}
               className={[
-                "h-14 rounded-lg border flex flex-col items-center justify-center gap-0.5 transition-all",
+                "h-16 rounded-lg border flex flex-col items-center justify-center gap-1 px-1 transition-all",
                 active
                   ? "border-vp-accent bg-vp-accent/5 text-vp-accent shadow-sm"
                   : "border-vp-border text-slate-500 hover:border-slate-400 hover:text-vp-ink",
               ].join(" ")}
             >
               {t.icon(active)}
-              <span className="text-[9px] font-medium leading-none">
-                {t.label.split(" ")[0]}
+              <span className="text-[9px] font-medium leading-none text-center truncate w-full">
+                {t.label}
               </span>
             </button>
           );
@@ -440,6 +496,32 @@ function ShapeSelection() {
           }
         />
       )}
+      {shape === "boutique" && (
+        <ModifierSlider
+          label="Curve depth"
+          value={slant}
+          max={maxModifier}
+          onChange={(v) => updateModifiers({ slantLengthMm: v })}
+        />
+      )}
+      {shape === "barrel" && (
+        <ModifierSlider
+          label="Bulge depth"
+          value={slant}
+          max={maxModifier}
+          onChange={(v) => updateModifiers({ slantLengthMm: v })}
+        />
+      )}
+      {shape === "ticket" && (
+        <ModifierSlider
+          label="Notch size"
+          value={radius}
+          max={maxModifier}
+          onChange={(v) => updateModifiers({ cornerRadiusMm: v })}
+        />
+      )}
+      {/* arch + pill take no slider — geometry is fully derived from
+          the bleed's length × width. */}
 
       {/* "Top corners" / "All corners" segmented control — only meaningful
           for round + cut. Standard luggage-tag profile is top-only. */}

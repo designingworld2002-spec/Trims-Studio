@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { LayoutGrid, QrCode, Table2, SquarePen } from "lucide-react";
+import { LayoutGrid, QrCode, Table2, SquarePen, Barcode } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { QrCodeModal } from "../QrCodeModal";
+import { BarcodeModal } from "../BarcodeModal";
 import { TableModal } from "../TableModal";
 
 interface Option {
@@ -15,13 +16,20 @@ interface Option {
 
 export function MorePanel() {
   const productSlug = useCanvasStore((s) => s.productSlug);
+  const productHandle = useCanvasStore((s) => s.productConfig.handle);
   const setActiveTool = useCanvasStore((s) => s.setActiveTool);
   const [qrOpen, setQrOpen] = useState(false);
+  const [barcodeOpen, setBarcodeOpen] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
 
   // Woven labels are typically too small (≤25 mm short edge) to carry a
-  // scannable QR — disable the tool for that product specifically.
-  const qrDisabled = productSlug === "woven-labels";
+  // scannable QR / barcode — disable both for that product. We check
+  // BOTH the URL slug and the resolved config handle so aliases
+  // ("woven_labels", "Woven Labels") are caught too.
+  const isWoven =
+    productSlug === "woven-labels" || productHandle === "woven-labels";
+  const qrDisabled = isWoven;
+  const barcodeDisabled = isWoven;
 
   const options: Option[] = [
     {
@@ -45,6 +53,17 @@ export function MorePanel() {
       onClick: () => setQrOpen(true),
       disabled: qrDisabled,
       disabledReason: qrDisabled ? "Not available for woven labels" : undefined,
+    },
+    // Barcode — available to ALL products except woven labels.
+    {
+      key: "barcode",
+      label: "Barcode",
+      icon: Barcode,
+      onClick: () => setBarcodeOpen(true),
+      disabled: barcodeDisabled,
+      disabledReason: barcodeDisabled
+        ? "Not available for woven labels"
+        : undefined,
     },
     {
       key: "tables",
@@ -84,6 +103,7 @@ export function MorePanel() {
         })}
       </div>
       <QrCodeModal open={qrOpen} onClose={() => setQrOpen(false)} />
+      <BarcodeModal open={barcodeOpen} onClose={() => setBarcodeOpen(false)} />
       <TableModal open={tableOpen} onClose={() => setTableOpen(false)} />
     </>
   );

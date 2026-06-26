@@ -6,6 +6,7 @@ import {
   getProductConfig,
   type ProductConfig,
 } from "@/config/productConfig";
+import { buildBarcodeApiUrl } from "@/lib/barcode";
 
 /**
  * User-selectable silhouette for the active product. Replaces the old
@@ -29,7 +30,18 @@ export type CanvasShape =
   /** Top + bottom straight; left + right curve inward (waist / bell). */
   | "flared"
   /** Angled cut top corners + rounded arc bottom corners. */
-  | "mixed-cut-round";
+  | "mixed-cut-round"
+  // ---- Premium hangtag silhouettes (extended set) ----
+  /** Vintage ornate top — concave dips flank a convex central bump. */
+  | "boutique"
+  /** Tombstone — square bottom, perfect semi-circle top arch. */
+  | "arch"
+  /** Bent oval — straight vertical sides, convex bulging top + bottom. */
+  | "barrel"
+  /** Capsule — short edges replaced entirely by 180° semi-circles. */
+  | "pill"
+  /** Cinema-ticket — small concave semi-circle bites at the 4 vertices. */
+  | "ticket";
 
 export interface ShapeModifiers {
   /** Round-corners: corner radius in mm. */
@@ -97,6 +109,115 @@ function clamp01(v: number): number {
   if (v > 1) return 1;
   return v;
 }
+
+/**
+ * Module-scoped timer for the auto-hide of `canvasWarning`. Kept
+ * outside the zustand state so React re-renders don't reset it, and so
+ * a re-trigger (`setCanvasWarning("...")` again) cleanly cancels the
+ * pending hide and starts a new 5-second window.
+ */
+let warningHideTimer: number | null = null;
+
+/**
+ * Whether the active product supports the half-flip orchestration
+ * (i.e. the editor will run the 0→90→-90→0 canvas animation). When
+ * false, `setActiveSide` falls back to an immediate JSON load so the
+ * back side still shows up.
+ */
+function productSupportsHalfFlip(s: CanvasStoreState): boolean {
+  return !!s.productConfig?.supportsBackSide;
+}
+
+/**
+ * Mirror of the live-canvas re-centring math in `toggleOrientation`,
+ * but applied to a STORED side snapshot (fabric JSON). Used to keep the
+ * inactive side coherent with the user's orientation swap so that when
+ * they flip, the back face slots into the new bleed without distortion.
+ *
+ * Mutates a CLONE — the original snapshot is left untouched.
+ */
+function rotateSnapshotOrientation(
+  snap: SideSnapshot,
+  oldLengthMm: number,
+  oldWidthMm: number,
+  newLengthMm: number,
+  newWidthMm: number
+): SideSnapshot {
+  const MM_PX = 10;
+  const VIRTUAL = 2000;
+  const vcx = VIRTUAL / 2;
+  const vcy = VIRTUAL / 2;
+  const oldBleedW = oldLengthMm * MM_PX;
+  const oldBleedH = oldWidthMm * MM_PX;
+  const newBleedW = newLengthMm * MM_PX;
+  const newBleedH = newWidthMm * MM_PX;
+  const oldLeft = vcx - oldBleedW / 2;
+  const oldTop = vcy - oldBleedH / 2;
+  const newLeft = vcx - newBleedW / 2;
+  const newTop = vcy - newBleedH / 2;
+
+  // Deep-clone the fabric payload so we never mutate a payload the
+  // caller might still be reading.
+  const rawFabric =
+    typeof snap.fabric === "string"
+      ? safeParseJson(snap.fabric)
+      : snap.fabric;
+  const cloned: any =
+    rawFabric && typeof rawFabric === "object"
+      ? JSON.parse(JSON.stringify(rawFabric))
+      : { objects: [] };
+
+  const objects: any[] = Array.isArray(cloned.objects) ? cloned.objects : [];
+  for (const o of objects) {
+    if (!o || typeof o !== "object") continue;
+    // Skip guides / bleed / safety / hole — they're rebuilt by the
+    // guide pass on load.
+    if (o.excludeFromExport) continue;
+    // The fabric JSON stores `left` / `top` as the object's TOP-LEFT
+    // anchor in canvas pixels (after any originX/Y is applied). For
+    // re-centring we approximate the object's own centre as
+    // (left + width*scaleX/2, top + height*scaleY/2). When originX/Y
+    // is "center", left/top already point at the centre.
+    const left = Number(o.left) || 0;
+    const top = Number(o.top) || 0;
+    const width = Number(o.width) || 0;
+    const height = Number(o.height) || 0;
+    const scaleX = Number(o.scaleX) || 1;
+    const scaleY = Number(o.scaleY) || 1;
+    const isCentre = o.originX === "center" && o.originY === "center";
+    const oldCx = isCentre ? left : left + (width * scaleX) / 2;
+    const oldCy = isCentre ? top : top + (height * scaleY) / 2;
+    const relX = clamp01((oldCx - oldLeft) / Math.max(1, oldBleedW));
+    const relY = clamp01((oldCy - oldTop) / Math.max(1, oldBleedH));
+    const newCx = newLeft + relX * newBleedW;
+    const newCy = newTop + relY * newBleedH;
+    const dx = newCx - oldCx;
+    const dy = newCy - oldCy;
+    if (dx !== 0 || dy !== 0) {
+      o.left = left + dx;
+      o.top = top + dy;
+    }
+  }
+
+  return {
+    ...snap,
+    fabric: cloned,
+    lengthMm: newLengthMm,
+    widthMm: newWidthMm,
+    tagOrientation:
+      snap.tagOrientation === "vertical" ? "horizontal" : "vertical",
+  };
+}
+
+function safeParseJson(s: string): any {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return { objects: [] };
+  }
+}
+
+
 
 /** Tolerant JSON parse — accepts an object verbatim or parses a string. */
 function parseJsonLoose(raw: any): any | null {
@@ -172,6 +293,7 @@ export type SelectedItemType =
   | "text"
   | "image"
   | "qr"
+  | "barcode"
   | "shape"
   | "group"
   | "activeSelection"
@@ -209,6 +331,23 @@ export interface SelectedItemState {
   /** QR code colours (only meaningful when type === "qr"). */
   qrFgColor: string;
   qrBgColor: string;
+  /** Barcode colours (only meaningful when type === "barcode"). */
+  barColor: string;
+  barBgColor: string;
+  /** Whether the barcode has a solid background (false = transparent). */
+  barHasBg: boolean;
+  /**
+   * For images, true when the rendered DPI dips below the safe
+   * print-quality threshold (~150 DPI). Drives the red sidebar banner
+   * + Replace Image CTA so the user can swap the asset before order.
+   */
+  isLowRes: boolean;
+  /**
+   * For images, the UNION quality flag: low DPI (pixel stretch) OR
+   * optical blur (out of focus). Drives the toolbar warning icon +
+   * "Enhance / Sharpen" affordance.
+   */
+  isBlurry: boolean;
 }
 
 const DEFAULT_SELECTED: SelectedItemState = {
@@ -230,6 +369,11 @@ const DEFAULT_SELECTED: SelectedItemState = {
   underline: false,
   qrFgColor: "#000000",
   qrBgColor: "#ffffff",
+  barColor: "#000000",
+  barBgColor: "#ffffff",
+  barHasBg: true,
+  isLowRes: false,
+  isBlurry: false,
 };
 
 export interface CanvasStoreState {
@@ -386,6 +530,18 @@ export interface CanvasStoreState {
   /** Regenerate the active QR image with new fg/bg colours (async). */
   updateQrColors: (fg?: string, bg?: string) => Promise<void>;
 
+  /**
+   * Re-fetch the active barcode from the bwip-js API with new bar/text
+   * colour and/or background colour, then swap the fabric.Image source.
+   * `bg === "transparent"` omits the API background param for a fully
+   * transparent backdrop.
+   */
+  updateBarcodeColors: (opts: {
+    barColor?: string;
+    bgColor?: string;
+    hasBg?: boolean;
+  }) => Promise<void>;
+
   // ---- history (Undo/Redo) ----
   canUndo: boolean;
   canRedo: boolean;
@@ -405,6 +561,25 @@ export interface CanvasStoreState {
    */
   shapeModifiers: ShapeModifiers;
   updateShapeModifiers: (patch: Partial<ShapeModifiers>) => void;
+
+  /**
+   * Transient top-right warning shown while the user is moving / scaling
+   * an object outside the safe area, over the hole punch, or when the
+   * image they're handling is too low-resolution to print cleanly.
+   * `null` hides the toast. Auto-clears 5s after the last set unless
+   * a follow-up event re-triggers the warning (the timeout is reset
+   * inside `setCanvasWarning`).
+   */
+  canvasWarning: string | null;
+  /**
+   * Monotonic counter bumped on EVERY `setCanvasWarning(msg)` call with
+   * a non-null message. The toast keys on this so an identical
+   * consecutive warning (e.g. two blurry uploads in a row) still
+   * replays the slide-in animation — `key={message}` alone wouldn't
+   * change when the string is the same.
+   */
+  canvasWarningId: number;
+  setCanvasWarning: (msg: string | null) => void;
 
   // ---- preview ----
   previewOpen: boolean;
@@ -444,6 +619,14 @@ export interface CanvasStoreState {
    */
   setActiveSide: (side: "front" | "back") => void;
 
+  /**
+   * Load the snapshot for `activeSide` into the live fabric canvas.
+   * Used by Workspace.tsx's half-flip orchestration to defer the
+   * content swap until the canvas is edge-on (rotated 90°). Also
+   * called directly by single-faced products that skip the flip.
+   */
+  loadActiveSideJson: () => void;
+
   /** Whether the "Change the back" chooser modal is open. */
   backChooserOpen: boolean;
   setBackChooserOpen: (b: boolean) => void;
@@ -465,6 +648,13 @@ export interface CanvasStoreState {
    *   - 'upload'    → switch to back blank + open the upload modal
    */
   initBackDesign: (kind: "duplicate" | "blank" | "upload") => void;
+  /**
+   * Discard the back-side design completely. Clears `backDesign` and
+   * forces `activeSide` back to "front", repainting the canvas with the
+   * front snapshot so the user is never left staring at an empty back
+   * face after deletion.
+   */
+  clearBackDesign: () => void;
   /** Direct setters (used by save-design loaders that hydrate both sides). */
   setFrontDesign: (snap: SideSnapshot | null) => void;
   setBackDesign: (snap: SideSnapshot | null) => void;
@@ -492,6 +682,9 @@ function classifyType(obj: fabric.Object): SelectedItemType {
   // their colour pickers through the regenerator instead of the generic
   // fill/stroke path.
   if (t === "image" && (obj as any).qrUrl) return "qr";
+  // Barcodes are tagged with `barcodeText` so their colour pickers route
+  // through the barcode regenerator (re-fetch from the bwip-js API).
+  if (t === "image" && (obj as any).barcodeText) return "barcode";
   if (t === "image") return "image";
   if (
     t === "rect" ||
@@ -677,6 +870,24 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       if (!hist) history.resume(false);
     }
 
+    // Sync the inactive side's STORED snapshot to the new orientation so
+    // it stays coherent when the user flips. Without this the inactive
+    // snapshot keeps the OLD (length, width, tagOrientation) and re-loads
+    // into the wrong-shape bleed, distorting every object.
+    const inactiveKey =
+      s.activeSide === "front" ? "backDesign" : "frontDesign";
+    const inactiveSnap = (s as any)[inactiveKey] as SideSnapshot | null;
+    if (inactiveSnap) {
+      const rotatedSnap = rotateSnapshotOrientation(
+        inactiveSnap,
+        oldLengthMm,
+        oldWidthMm,
+        newLengthMm,
+        newWidthMm
+      );
+      set({ [inactiveKey]: rotatedSnap } as any);
+    }
+
     if (!history.isPaused()) {
       queueMicrotask(() => history.commit());
     }
@@ -845,6 +1056,17 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       underline: !!anyObj.underline,
       qrFgColor: safeString(anyObj.qrFgColor, DEFAULT_SELECTED.qrFgColor),
       qrBgColor: safeString(anyObj.qrBgColor, DEFAULT_SELECTED.qrBgColor),
+      barColor: safeString(anyObj.barColor, DEFAULT_SELECTED.barColor),
+      barBgColor: safeString(anyObj.barBgColor, DEFAULT_SELECTED.barBgColor),
+      barHasBg:
+        typeof anyObj.barHasBg === "boolean"
+          ? anyObj.barHasBg
+          : DEFAULT_SELECTED.barHasBg,
+      // `isLowRes` / `isBlurry` are stamped onto the fabric object by
+      // the workspace quality check; we surface them here so the toolbar
+      // can light up the warning icon + Enhance affordance.
+      isLowRes: !!anyObj.isLowRes,
+      isBlurry: !!anyObj.isBlurry,
     };
     set({ selected: next });
   },
@@ -888,6 +1110,53 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       });
     } catch (e) {
       console.warn("[qr recolour] failed:", e);
+    }
+  },
+
+  updateBarcodeColors: async ({ barColor, bgColor, hasBg }) => {
+    const { canvas, selected } = get();
+    if (!canvas || !selected || selected.type !== "barcode") return;
+    const obj = canvas.getActiveObject() as any;
+    if (!obj || !obj.barcodeText) return;
+    const nextBar = barColor ?? obj.barColor ?? "#000000";
+    const nextHasBg =
+      typeof hasBg === "boolean" ? hasBg : obj.barHasBg !== false;
+    const nextBg = bgColor ?? obj.barBgColor ?? "#ffffff";
+    try {
+      const url = buildBarcodeApiUrl(obj.barcodeText, {
+        barColor: nextBar,
+        bgColor: nextBg,
+        hasBg: nextHasBg,
+      });
+      const resp = await fetch(url, { mode: "cors" });
+      if (!resp.ok) throw new Error(`Barcode service ${resp.status}`);
+      const blob = await resp.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      obj.barColor = nextBar;
+      obj.barBgColor = nextBg;
+      obj.barHasBg = nextHasBg;
+      obj.setSrc(
+        objectUrl,
+        () => {
+          canvas.requestRenderAll();
+          canvas.fire("object:modified", { target: obj });
+          URL.revokeObjectURL(objectUrl);
+          const cur = get().selected;
+          if (cur)
+            set({
+              selected: {
+                ...cur,
+                barColor: nextBar,
+                barBgColor: nextBg,
+                barHasBg: nextHasBg,
+              },
+            });
+        },
+        { crossOrigin: "anonymous" }
+      );
+    } catch (e) {
+      console.warn("[barcode recolour] failed:", e);
+      get().setCanvasWarning("Couldn't update barcode colour — try again.");
     }
   },
 
@@ -996,6 +1265,37 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
     }));
     if (!history.isPaused()) {
       queueMicrotask(() => history.commit());
+    }
+  },
+
+  canvasWarning: null,
+  canvasWarningId: 0,
+  setCanvasWarning: (msg) => {
+    if (msg) {
+      // Bump the nonce so the toast re-mounts + replays its animation
+      // even when the message text is identical to the one showing.
+      set((s) => ({
+        canvasWarning: msg,
+        canvasWarningId: s.canvasWarningId + 1,
+      }));
+      if (warningHideTimer) clearTimeout(warningHideTimer);
+      const myId = get().canvasWarningId;
+      warningHideTimer = window.setTimeout(() => {
+        // Clear ONLY if no newer warning has superseded this one. We
+        // compare the nonce (not the string) so back-to-back identical
+        // warnings each get their full 5s window. Per spec we always
+        // reset the state to null when our window expires.
+        if (get().canvasWarningId === myId) {
+          set({ canvasWarning: null });
+        }
+        warningHideTimer = null;
+      }, 5000);
+    } else {
+      if (warningHideTimer) {
+        clearTimeout(warningHideTimer);
+        warningHideTimer = null;
+      }
+      set({ canvasWarning: null });
     }
   },
 
@@ -1258,24 +1558,26 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       set({ activeSide: side });
     }
 
-    // 2) Load the TARGET side. If a snapshot exists, restore EVERY
-    //    persisted field: dims + orientation drive the guides; fabric
-    //    + backgroundColor drive the visible art. designOps.loadJson
-    //    reads the bg from the JSON top-level `background` field, so
-    //    we inject it.
+    // 2) DEFER the target JSON load. The Workspace half-flip orchestration
+    //    invokes `loadActiveSideJson()` at the 90° midpoint — the exact
+    //    moment the canvas is edge-on (invisible) — so the content swap
+    //    is never visible to the user. If the canvas hasn't been mounted
+    //    by the orchestration (e.g. supportsBackSide is false elsewhere
+    //    in a future product), the swap still completes at the next
+    //    microtask so single-side products don't regress.
+    if (!productSupportsHalfFlip(get())) {
+      queueMicrotask(() => get().loadActiveSideJson());
+    }
+  },
+  loadActiveSideJson: () => {
+    const s = get();
     const targetSnap =
-      side === "front" ? get().frontDesign : get().backDesign;
+      s.activeSide === "front" ? s.frontDesign : s.backDesign;
     import("@/components/Workspace").then(({ designOps }) => {
       if (targetSnap) {
         try {
           const targetLen = targetSnap.lengthMm || get().canvasLengthMm;
           const targetWid = targetSnap.widthMm || get().canvasWidthMm;
-          // ATOMIC restore: tagOrientation + dims + skipRescale flag all
-          // set in a single update so the Workspace dim-effect sees a
-          // CONSISTENT target state on its first re-render. If we set
-          // tagOrientation first (separately) the effect fires once with
-          // OLD dims + NEW orientation → guides draw at wrong size →
-          // race with the next dim-update + drawGuides call.
           set({
             tagOrientation: targetSnap.tagOrientation,
             canvasLengthMm: targetLen,
@@ -1290,13 +1592,54 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
           fabricPayload.background = targetSnap.backgroundColor;
           designOps.loadJson(fabricPayload, targetLen, targetWid);
         } catch (e) {
-          console.warn("[setActiveSide] failed to load target snap:", e);
+          console.warn("[loadActiveSideJson] failed to load target:", e);
           designOps.clearAll();
         }
       } else {
         designOps.clearAll();
       }
     });
+  },
+  clearBackDesign: () => {
+    const s = get();
+    // If the user is currently editing the back side, hop back to front
+    // FIRST so setActiveSide can persist their in-progress back work into
+    // a snapshot we are about to throw away — and so the canvas gets
+    // repainted with the front design before we null out backDesign.
+    if (s.activeSide === "back") {
+      // Don't preserve the back snapshot — we're discarding it. Skip the
+      // setActiveSide path (which would snapshot the canvas into
+      // backDesign) and instead manually load the front snapshot.
+      const canvas = s.canvas;
+      const frontSnap = s.frontDesign;
+      set({ activeSide: "front", backDesign: null });
+      if (canvas && frontSnap) {
+        import("@/components/Workspace").then(({ designOps }) => {
+          try {
+            const len = frontSnap.lengthMm || s.canvasLengthMm;
+            const wid = frontSnap.widthMm || s.canvasWidthMm;
+            set({
+              tagOrientation: frontSnap.tagOrientation,
+              canvasLengthMm: len,
+              canvasWidthMm: wid,
+              aspectRatio: len / Math.max(1, wid),
+              _skipNextDimRescale: true,
+            });
+            const fabricPayload =
+              typeof frontSnap.fabric === "string"
+                ? JSON.parse(frontSnap.fabric)
+                : { ...(frontSnap.fabric || {}) };
+            fabricPayload.background = frontSnap.backgroundColor;
+            designOps.loadJson(fabricPayload, len, wid);
+          } catch (e) {
+            console.warn("[clearBackDesign] failed to restore front:", e);
+          }
+        });
+      }
+      return;
+    }
+    // Already on front — just discard the back slot.
+    set({ backDesign: null });
   },
 }));
 
@@ -1314,6 +1657,10 @@ function snapshotCanvas(
     "qrUrl",
     "qrFgColor",
     "qrBgColor",
+    "barcodeText",
+    "barColor",
+    "barBgColor",
+    "barHasBg",
     "excludeFromExport",
     "selectable",
     "evented",

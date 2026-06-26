@@ -52,6 +52,7 @@ button {
   background: transparent;
 }
 
+
 /* Range slider styling */
 input[type="range"].vp-range {
   -webkit-appearance: none;

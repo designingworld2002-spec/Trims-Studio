@@ -112,7 +112,7 @@ export const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
     // repeating gradients perpendicular to each other simulate the
     // interlace pattern at ~1px thread spacing.
     textureOverlayCss: "url('/texture-woven.png')",
-    textureOverlayOpacity: 0.85,
+    textureOverlayOpacity: 0.35,
     textureOverlayBlendMode: "multiply",
   },
 
@@ -141,6 +141,12 @@ export const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
       "hexagon-pointed",
       "flared",
       "mixed-cut-round",
+      // Extended premium set (boutique-style die-cuts)
+      "boutique",
+      "arch",
+      "barrel",
+      "pill",
+      "ticket",
     ],
     // Tags print front and back.
     supportsBackSide: true,
@@ -150,7 +156,67 @@ export const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
     textureOverlayOpacity: 0.7,
     textureOverlayBlendMode: "multiply",
   },
+
+  // -------------------------------------------------------------------
+  // Printed labels — cotton / satin / taffeta. These are flat printed
+  // fabric labels (no die-cut hole punch). They share hangtag-grade
+  // capabilities: full toolset, QR + Barcode, and independent
+  // front/back printing. Shapes are limited to the rectangular family
+  // (printed labels are guillotine-cut, not die-cut). A single shared
+  // config factory keeps the three materials consistent.
+  // -------------------------------------------------------------------
+  ...printedLabelConfigs(),
 };
+
+/**
+ * Build the three printed-label product configs from one template so
+ * cotton / satin / taffeta stay perfectly in sync — they differ only
+ * in handle, label, and the material texture overlay.
+ */
+function printedLabelConfigs(): Record<string, ProductConfig> {
+  const base = (
+    handle: string,
+    label: string,
+    texture: string,
+    opacity: number
+  ): ProductConfig => ({
+    handle,
+    label,
+    allowedTools: ALL_TOOLS,
+    // Printed labels are usually small landscape rectangles.
+    defaultDimensions: { lengthMm: 60, widthMm: 40 },
+    visualGuides: NO_HOLE,
+    canvasClipShape: "rectangle",
+    // Guillotine-cut, so only the rectangular family is offered.
+    allowedShapes: ["rectangle", "round-corners", "cut-corners"],
+    // Printed both sides, exactly like hang tags.
+    supportsBackSide: true,
+    textureOverlayCss: texture,
+    textureOverlayOpacity: opacity,
+    textureOverlayBlendMode: "multiply",
+  });
+  return {
+    "cotton-printed-labels": base(
+      "cotton-printed-labels",
+      "Cotton Printed Labels",
+      "url('/texture-woven.png')",
+      0.32
+    ),
+    "satin-printed-labels": base(
+      "satin-printed-labels",
+      "Satin Printed Labels",
+      // Satin reads smoother/glossier — lighter overlay, soft sheen.
+      "url('/texture-woven.png')",
+      0.18
+    ),
+    "taffeta-printed-labels": base(
+      "taffeta-printed-labels",
+      "Taffeta Printed Labels",
+      "url('/texture-woven.png')",
+      0.4
+    ),
+  };
+}
 
 /**
  * Resolve a product handle (possibly an alias or `null`) to its config,
@@ -167,6 +233,21 @@ export function getProductConfig(
   const norm = handle.toLowerCase().trim().replace(/[\s_]+/g, "-");
   if (PRODUCT_CONFIGS[norm]) return PRODUCT_CONFIGS[norm];
   if (norm.includes("hang")) return PRODUCT_CONFIGS["hang-tags"];
+
+  // Printed labels — match the material keyword. Checked BEFORE the
+  // generic "woven"/"label" fallback so "cotton printed labels" etc.
+  // resolve to their own config (and NOT to woven-labels, which has
+  // back-side + QR disabled).
+  if (norm.includes("cotton"))
+    return PRODUCT_CONFIGS["cotton-printed-labels"];
+  if (norm.includes("satin"))
+    return PRODUCT_CONFIGS["satin-printed-labels"];
+  if (norm.includes("taffeta"))
+    return PRODUCT_CONFIGS["taffeta-printed-labels"];
+  // A generic "printed labels" (no material named) → cotton default.
+  if (norm.includes("printed"))
+    return PRODUCT_CONFIGS["cotton-printed-labels"];
+
   if (norm.includes("woven") || norm.includes("label"))
     return PRODUCT_CONFIGS["woven-labels"];
 

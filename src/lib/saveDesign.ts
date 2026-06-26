@@ -10,6 +10,7 @@ import type {
   ShapeModifiers,
   SideSnapshot,
 } from "@/store/canvasStore";
+import { getProductConfig, type VisualGuides } from "@/config/productConfig";
 
 /**
  * Final "Continue" save flow.
@@ -99,6 +100,56 @@ function metaFromPayload(p: SidePayload | null): PersistedSideMeta | null {
 }
 
 const MM_TO_PX = 10;
+
+/**
+ * Build the destination-out cutout disc that physically punches a
+ * transparent hole into an exported PNG. Mirrors the live-canvas hole
+ * geometry in Workspace.tsx so the offscreen render of the inactive
+ * side bakes an IDENTICAL native hole. Returns `null` when the product
+ * has no hole punch.
+ */
+function buildHoleCutout(
+  lengthMm: number,
+  widthMm: number,
+  tagOrientation: "vertical" | "horizontal",
+  visualGuides: VisualGuides | undefined
+): fabric.Circle | null {
+  if (
+    !visualGuides ||
+    !visualGuides.hasHolePunch ||
+    visualGuides.holePunchRadiusMm <= 0
+  ) {
+    return null;
+  }
+  const bleedW = lengthMm * MM_TO_PX;
+  const bleedH = widthMm * MM_TO_PX;
+  const cx = VIRTUAL_SIZE / 2;
+  const cy = VIRTUAL_SIZE / 2;
+  const bleedLeft = cx - bleedW / 2;
+  const bleedTop = cy - bleedH / 2;
+  const holeR = visualGuides.holePunchRadiusMm * MM_TO_PX;
+  const holeOffsetPx = visualGuides.holePunchOffsetFromTopMm * MM_TO_PX;
+  const holeCenterX =
+    tagOrientation === "horizontal"
+      ? bleedLeft + bleedW - holeOffsetPx
+      : cx;
+  const holeCenterY =
+    tagOrientation === "horizontal" ? cy : bleedTop + holeOffsetPx;
+  return new fabric.Circle({
+    radius: holeR,
+    left: holeCenterX,
+    top: holeCenterY,
+    originX: "center",
+    originY: "center",
+    fill: "#000000",
+    stroke: undefined,
+    strokeWidth: 0,
+    globalCompositeOperation: "destination-out",
+    excludeFromExport: true,
+    selectable: false,
+    evented: false,
+  } as any);
+}
 const VIRTUAL_SIZE = 2000;
 const PREVIEW_MULTIPLIER = 2; // 2× = ~600 dpi for a 70mm label
 
@@ -135,7 +186,8 @@ export async function saveDesign(
     ? await snapshotFromStoredSnapshot(
         otherStored,
         input.canvasShape,
-        input.shapeModifiers
+        input.shapeModifiers,
+        getProductConfig(input.productSlug).visualGuides
       )
     : null;
 
@@ -270,6 +322,17 @@ function pointedTopPoints(
   h: number,
   pointHeight: number
 ): { x: number; y: number }[] {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const p = Math.max(0, Math.min(pointHeight, h * 0.5, w * 0.45));
+    return [
+      { x: left + w, y: top + h / 2 },
+      { x: left + w - p, y: top + h },
+      { x: left, y: top + h },
+      { x: left, y: top },
+      { x: left + w - p, y: top },
+    ];
+  }
   const p = Math.max(0, Math.min(pointHeight, w * 0.5, h * 0.45));
   return [
     { x: left + w / 2, y: top },
@@ -287,6 +350,18 @@ function hexagonPointedPoints(
   h: number,
   pointHeight: number
 ): { x: number; y: number }[] {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const p = Math.max(0, Math.min(pointHeight, h * 0.5, w * 0.4));
+    return [
+      { x: left + w, y: top + h / 2 },
+      { x: left + w - p, y: top + h },
+      { x: left + p, y: top + h },
+      { x: left, y: top + h / 2 },
+      { x: left + p, y: top },
+      { x: left + w - p, y: top },
+    ];
+  }
   const p = Math.max(0, Math.min(pointHeight, w * 0.5, h * 0.4));
   return [
     { x: left + w / 2, y: top },
@@ -299,6 +374,17 @@ function hexagonPointedPoints(
 }
 
 function flaredPath(w: number, h: number, waist: number): string {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const d = Math.max(0, Math.min(waist, h * 0.35));
+    return [
+      `M 0 0`,
+      `Q ${w / 2} ${d} ${w} 0`,
+      `L ${w} ${h}`,
+      `Q ${w / 2} ${h - d} 0 ${h}`,
+      "Z",
+    ].join(" ");
+  }
   const d = Math.max(0, Math.min(waist, w * 0.35));
   return [
     `M 0 0`,
@@ -311,7 +397,21 @@ function flaredPath(w: number, h: number, waist: number): string {
 }
 
 function mixedCutRoundPath(w: number, h: number, corner: number): string {
+  const isHorizontal = w > h;
   const c = Math.max(0, Math.min(corner, w * 0.4, h * 0.4));
+  if (isHorizontal) {
+    return [
+      `M 0 ${c}`,
+      `A ${c} ${c} 0 0 1 ${c} 0`,
+      `L ${w - c} 0`,
+      `L ${w} ${c}`,
+      `L ${w} ${h - c}`,
+      `L ${w - c} ${h}`,
+      `L ${c} ${h}`,
+      `A ${c} ${c} 0 0 1 0 ${h - c}`,
+      "Z",
+    ].join(" ");
+  }
   return [
     `M ${c} 0`,
     `L ${w - c} 0`,
@@ -322,6 +422,119 @@ function mixedCutRoundPath(w: number, h: number, corner: number): string {
     `A ${c} ${c} 0 0 1 0 ${h - c}`,
     `L 0 ${c}`,
     `L ${c} 0`,
+    "Z",
+  ].join(" ");
+}
+
+/* ----- Extended premium silhouettes (mirror Workspace.tsx) -------- */
+
+function boutiquePath(w: number, h: number, depth: number): string {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const d = Math.max(0, Math.min(depth, w * 0.45));
+    return [
+      `M 0 0`,
+      `L ${w - d} 0`,
+      `C ${w - d} ${h * 0.15}, ${w} ${h * 0.3}, ${w} ${h / 2}`,
+      `C ${w} ${h * 0.7}, ${w - d} ${h * 0.85}, ${w - d} ${h}`,
+      `L 0 ${h}`,
+      "Z",
+    ].join(" ");
+  }
+  const d = Math.max(0, Math.min(depth, h * 0.45));
+  return [
+    `M 0 ${d}`,
+    `C ${w * 0.15} ${d}, ${w * 0.3} 0, ${w / 2} 0`,
+    `C ${w * 0.7} 0, ${w * 0.85} ${d}, ${w} ${d}`,
+    `L ${w} ${h}`,
+    `L 0 ${h}`,
+    "Z",
+  ].join(" ");
+}
+
+function archPath(w: number, h: number): string {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const r = h / 2;
+    const arcW = Math.min(r, w * 0.5);
+    return [
+      `M 0 0`,
+      `L ${w - arcW} 0`,
+      `A ${arcW} ${r} 0 0 1 ${w - arcW} ${h}`,
+      `L 0 ${h}`,
+      "Z",
+    ].join(" ");
+  }
+  const r = w / 2;
+  const arcH = Math.min(r, h * 0.5);
+  return [
+    `M 0 ${arcH}`,
+    `A ${r} ${arcH} 0 0 1 ${w} ${arcH}`,
+    `L ${w} ${h}`,
+    `L 0 ${h}`,
+    "Z",
+  ].join(" ");
+}
+
+function barrelPath(w: number, h: number, bulge: number): string {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const d = Math.max(0, Math.min(bulge, w * 0.45));
+    const k = d / 3;
+    return [
+      `M ${d} 0`,
+      `L ${w - d} 0`,
+      `C ${w + k} 0, ${w + k} ${h}, ${w - d} ${h}`,
+      `L ${d} ${h}`,
+      `C ${-k} ${h}, ${-k} 0, ${d} 0`,
+      "Z",
+    ].join(" ");
+  }
+  const d = Math.max(0, Math.min(bulge, h * 0.45));
+  const k = d / 3;
+  return [
+    `M 0 ${d}`,
+    `C 0 ${-k}, ${w} ${-k}, ${w} ${d}`,
+    `L ${w} ${h - d}`,
+    `C ${w} ${h + k}, 0 ${h + k}, 0 ${h - d}`,
+    "Z",
+  ].join(" ");
+}
+
+function pillPath(w: number, h: number): string {
+  if (h >= w) {
+    const r = w / 2;
+    return [
+      `M 0 ${r}`,
+      `A ${r} ${r} 0 0 1 ${w} ${r}`,
+      `L ${w} ${h - r}`,
+      `A ${r} ${r} 0 0 1 0 ${h - r}`,
+      "Z",
+    ].join(" ");
+  }
+  const r = h / 2;
+  return [
+    `M ${r} 0`,
+    `L ${w - r} 0`,
+    `A ${r} ${r} 0 0 1 ${w - r} ${h}`,
+    `L ${r} ${h}`,
+    `A ${r} ${r} 0 0 1 ${r} 0`,
+    "Z",
+  ].join(" ");
+}
+
+function ticketPath(w: number, h: number, notch: number): string {
+  const r = Math.max(0, Math.min(notch, w * 0.4, h * 0.4));
+  return [
+    `M ${r} 0`,
+    `L ${w - r} 0`,
+    `Q ${w - r} ${r} ${w} ${r}`,
+    `L ${w} ${h - r}`,
+    `Q ${w - r} ${h - r} ${w - r} ${h}`,
+    `L ${r} ${h}`,
+    `Q ${r} ${h - r} 0 ${h - r}`,
+    `L 0 ${r}`,
+    `Q ${r} ${r} ${r} 0`,
     "Z",
   ].join(" ");
 }
@@ -461,6 +674,36 @@ function buildShapeClipPath(
         top,
         ...opts,
       });
+    case "boutique":
+      return new fabric.Path(boutiquePath(bleedW, bleedH, slantPx), {
+        left,
+        top,
+        ...opts,
+      });
+    case "arch":
+      return new fabric.Path(archPath(bleedW, bleedH), {
+        left,
+        top,
+        ...opts,
+      });
+    case "barrel":
+      return new fabric.Path(barrelPath(bleedW, bleedH, slantPx), {
+        left,
+        top,
+        ...opts,
+      });
+    case "pill":
+      return new fabric.Path(pillPath(bleedW, bleedH), {
+        left,
+        top,
+        ...opts,
+      });
+    case "ticket":
+      return new fabric.Path(ticketPath(bleedW, bleedH, radiusPx), {
+        left,
+        top,
+        ...opts,
+      });
     case "rectangle":
     default:
       return new fabric.Rect({
@@ -498,18 +741,56 @@ function snapshotLive(
   const safety = canvas.getObjects().find((o) => (o as any).id === "safety");
   const bleed = canvas.getObjects().find((o) => (o as any).id === "bleed");
   const hole = canvas.getObjects().find((o) => (o as any).id === "holePunch");
+  // The hole punch is TWO objects:
+  //   • `holePunch`         — the red dashed GUIDE ring (editor-only)
+  //   • `holePunch-cutout`  — a destination-out disc that ERASES pixels
+  //
+  // For the print PNG we want the physical hole BAKED IN: hide the red
+  // guide ring so the dashed line doesn't print, but keep the cutout
+  // ACTIVE so the exported raster has a mathematically perfect native
+  // transparent hole. The Finalize page then just displays the PNG —
+  // no CSS overlay, no double hole.
+  const holeCutout = canvas
+    .getObjects()
+    .find((o) => (o as any).id === "holePunch-cutout");
 
   // Cache every field we're about to mutate.
   const prevCanvasBg = (canvas as any).backgroundColor;
   const prevCanvasClip = (canvas as any).clipPath;
   const prevSafetyOpacity = safety?.opacity ?? 1;
   const prevBleedOpacity = bleed?.opacity ?? 1;
-  const prevHoleOpacity = hole?.opacity ?? 1;
+  const prevHoleVisible = hole?.visible ?? true;
+  const prevCutoutVisible = holeCutout?.visible ?? true;
 
-  // Hide all guides — canvas.bg + clipPath own the silhouette now.
+  // The red dashed "low quality" border is an EDITOR-ONLY marker. It
+  // must never bake into the print PNG (a red line on the tag) nor
+  // persist in the saved JSON. Strip it from every image before export
+  // and restore afterward.
+  const warnStroked: Array<{
+    obj: any;
+    stroke: any;
+    strokeWidth: any;
+    strokeDashArray: any;
+  }> = [];
+  canvas.getObjects().forEach((o: any) => {
+    if (o.type === "image" && o.stroke === "#ef4444") {
+      warnStroked.push({
+        obj: o,
+        stroke: o.stroke,
+        strokeWidth: o.strokeWidth,
+        strokeDashArray: o.strokeDashArray,
+      });
+      o.set({ stroke: undefined, strokeWidth: 0, strokeDashArray: undefined });
+    }
+  });
+
+  // Hide the editor guides — canvas.bg + clipPath own the silhouette.
+  // CRITICAL: hide ONLY the red guide ring; the destination-out cutout
+  // STAYS visible so the transparent hole is baked into the PNG.
   if (safety) safety.set("opacity", 0);
   if (bleed) bleed.set("opacity", 0);
-  if (hole) hole.set("opacity", 0);
+  if (hole) hole.set({ visible: false });
+  if (holeCutout) holeCutout.set({ visible: true });
   // Paint the design's actual background colour INSIDE the clip; outside
   // the clip the canvas renders transparent (PNG alpha = 0).
   (canvas as any).backgroundColor = backgroundColor || "transparent";
@@ -536,12 +817,14 @@ function snapshotLive(
     multiplier: PREVIEW_MULTIPLIER,
   });
 
-  // Restore the live canvas exactly as it was.
+  // Restore the live canvas exactly as it was — the red guide ring
+  // becomes visible again so the editor shows the "don't place here" cue.
   (canvas as any).backgroundColor = prevCanvasBg;
   (canvas as any).clipPath = prevCanvasClip;
   if (safety) safety.set("opacity", prevSafetyOpacity);
   if (bleed) bleed.set("opacity", prevBleedOpacity);
-  if (hole) hole.set("opacity", prevHoleOpacity);
+  if (hole) hole.set({ visible: prevHoleVisible });
+  if (holeCutout) holeCutout.set({ visible: prevCutoutVisible });
   canvas.renderAll();
 
   const fabricJson = canvas.toJSON([
@@ -552,7 +835,22 @@ function snapshotLive(
     "qrUrl",
     "qrFgColor",
     "qrBgColor",
+    "barcodeText",
+    "barColor",
+    "barBgColor",
+    "barHasBg",
   ]);
+
+  // NOW restore the editor-only warning strokes (after BOTH the PNG and
+  // the JSON were captured, so neither carries the red border).
+  for (const w of warnStroked) {
+    w.obj.set({
+      stroke: w.stroke,
+      strokeWidth: w.strokeWidth,
+      strokeDashArray: w.strokeDashArray,
+    });
+  }
+  if (warnStroked.length) canvas.renderAll();
 
   return {
     previewDataUrl,
@@ -578,7 +876,8 @@ function snapshotLive(
 function snapshotFromStoredSnapshot(
   snap: SideSnapshot | null | undefined,
   canvasShape: CanvasShape,
-  shapeModifiers: ShapeModifiers
+  shapeModifiers: ShapeModifiers,
+  visualGuides?: VisualGuides
 ): Promise<SidePayload | null> {
   return new Promise((resolve) => {
     if (!snap || !snap.fabric) {
@@ -623,18 +922,19 @@ function snapshotFromStoredSnapshot(
       payload.background = snap.backgroundColor;
       off.loadFromJSON(payload, () => {
         try {
-          // Hide any leaked guide objects (older saves sometimes have
-          // them in the JSON). `excludeFromExport` on bleed/safety/hole
-          // means modern saves DON'T include them, but stay defensive.
-          off!.getObjects().forEach((o: any) => {
-            if (
-              o.id === "safety" ||
-              o.id === "holePunch" ||
-              o.id === "bleed"
-            ) {
-              o.set("opacity", 0);
-            }
-          });
+          // Strip any leaked guide objects (older saves sometimes
+          // embedded them). Modern saves exclude guides via
+          // `excludeFromExport`, but stay defensive.
+          const leaked = off!
+            .getObjects()
+            .filter(
+              (o: any) =>
+                o.id === "safety" ||
+                o.id === "holePunch" ||
+                o.id === "holePunch-cutout" ||
+                o.id === "bleed"
+            );
+          for (const o of leaked) off!.remove(o);
           // Paint the design's saved background INSIDE the silhouette;
           // OUTSIDE the canvas-level clipPath the export is alpha-zero.
           // This is the IDENTICAL pattern snapshotLive uses so both
@@ -647,6 +947,17 @@ function snapshotFromStoredSnapshot(
             lengthMm,
             widthMm
           );
+          // Re-create the destination-out cutout so the inactive side's
+          // PNG bakes an IDENTICAL native transparent hole (the saved
+          // JSON excludes guide objects, so we rebuild it from the
+          // product's visual guides). Added LAST so it erases on top.
+          const cutout = buildHoleCutout(
+            lengthMm,
+            widthMm,
+            snap.tagOrientation,
+            visualGuides
+          );
+          if (cutout) off!.add(cutout);
           off!.renderAll();
           const trimW = lengthMm * MM_TO_PX;
           const trimH = widthMm * MM_TO_PX;

@@ -33,10 +33,14 @@ export function LeftToolRail() {
       aria-label="Tools"
       className={[
         "shrink-0 bg-white flex",
-        // Mobile: horizontal bottom rail.
-        "w-full h-[64px] border-t border-gray-200 flex-row items-center justify-around overflow-x-auto px-1",
-        // Desktop: clean white vertical column with right hairline.
-        "md:w-[80px] md:h-auto md:border-t-0 md:border-r md:flex-col md:items-stretch md:justify-start md:py-3 md:px-0 md:gap-0.5 md:overflow-visible",
+        // Mobile: horizontal bottom rail — keep the hairline so it
+        // separates from the canvas.
+        "w-full h-[64px] border-t border-gray-100 flex-row items-center justify-around overflow-x-auto px-1",
+        // Desktop: clean white vertical column, NO right border. The
+        // canvas already sits on a soft tinted background which gives
+        // the natural separation, and dropping the border matches the
+        // reference's flat look.
+        "md:w-[80px] md:h-auto md:border-t-0 md:border-r-0 md:flex-col md:items-stretch md:justify-start md:py-3 md:px-0 md:gap-1.5 md:overflow-visible",
       ].join(" ")}
     >
       {visibleTools.map((t) => {
@@ -51,38 +55,41 @@ export function LeftToolRail() {
             className={[
               "relative group flex flex-col items-center justify-center transition-colors shrink-0 outline-none",
               // Mobile: pill button.
-              "w-[58px] h-[54px] rounded-lg gap-0.5",
-              // Desktop: full-width tile, no rounded background — the
-              // left-border accent does the work.
+              "w-[58px] h-[54px] rounded-lg gap-1",
+              // Desktop: full-width tile, no chip — the blue-circle
+              // icon below provides the active state on its own.
               "md:w-full md:h-[72px] md:rounded-none md:gap-1.5",
               active
-                ? "text-vp-accent"
-                : "text-slate-500 hover:text-vp-ink",
-              // Soft hover wash on mobile, nothing on desktop.
-              !active && "hover:bg-slate-50 md:hover:bg-transparent",
+                ? "text-sky-500"
+                : "text-slate-500 hover:text-slate-800",
             ]
               .filter(Boolean)
               .join(" ")}
           >
-            {/* Active indicator — 2px dark-slate left border on desktop,
-                small top bar on mobile. No filled chip. */}
-            {active && (
-              <>
-                <span
-                  aria-hidden
-                  className="hidden md:block absolute left-0 top-0 bottom-0 w-[2px] bg-vp-accent"
-                />
-                <span
-                  aria-hidden
-                  className="md:hidden absolute top-0 left-1/2 -translate-x-1/2 w-8 h-[2px] rounded-b-full bg-vp-accent"
-                />
-              </>
-            )}
-            <Icon
-              className="w-[22px] h-[22px] transition-transform group-hover:scale-105"
-              strokeWidth={ICON_STROKE}
-            />
-            <span className="text-[10.5px] font-medium tracking-wide leading-none">
+            {/* Icon — wrapped in a soft chip that turns into a solid
+                sky-400 circle when the tool is active. White icon on
+                blue chip mirrors the reference's flat UI. */}
+            <span
+              aria-hidden
+              className={[
+                "flex items-center justify-center transition-colors",
+                "w-9 h-9 rounded-full",
+                active
+                  ? "bg-vp-blue text-white shadow-sm"
+                  : "bg-transparent text-current",
+              ].join(" ")}
+            >
+              <Icon
+                className="w-[20px] h-[20px] transition-transform group-hover:scale-105"
+                strokeWidth={active ? 2.2 : ICON_STROKE}
+              />
+            </span>
+            <span
+              className={[
+                "text-[10.5px] font-medium tracking-wide leading-none",
+                active ? "text-sky-500" : "text-slate-500",
+              ].join(" ")}
+            >
               {t.label}
             </span>
           </button>

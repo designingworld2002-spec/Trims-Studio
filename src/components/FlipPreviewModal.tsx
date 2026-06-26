@@ -22,6 +22,49 @@ interface HolePunchPx {
  *  - vertical   → centred horizontally, offset down from the TOP edge
  *  - horizontal → centred vertically, offset inward from the RIGHT edge
  */
+/**
+ * Where to render the simple hole-punch overlay in the modal — as % of
+ * the face's bounding box. The display face is rendered at lengthMm ×
+ * widthMm in CSS, so we just normalise the same coordinates the canvas
+ * uses to percentages of those dimensions.
+ *
+ * Per orientation convention:
+ *   - vertical   → cx = lengthMm/2, cy = offset (top edge)
+ *   - horizontal → cx = lengthMm - offset, cy = widthMm/2 (right edge)
+ */
+function holePunchPct(
+  lengthMm: number,
+  widthMm: number,
+  visualGuides: {
+    hasHolePunch: boolean;
+    holePunchRadiusMm: number;
+    holePunchOffsetFromTopMm: number;
+  },
+  tagOrientation: "vertical" | "horizontal"
+): { cx: number; cy: number; r: number } | null {
+  if (!visualGuides.hasHolePunch || visualGuides.holePunchRadiusMm <= 0) {
+    return null;
+  }
+  const off = visualGuides.holePunchOffsetFromTopMm;
+  const rMm = visualGuides.holePunchRadiusMm;
+  // Radius is expressed relative to the LENGTH axis (CSS width of the
+  // face) so a width-driven CSS rule with aspect-ratio: 1/1 keeps it
+  // perfectly circular.
+  const r = (rMm / Math.max(1, lengthMm)) * 100;
+  if (tagOrientation === "horizontal") {
+    return {
+      cx: ((lengthMm - off) / Math.max(1, lengthMm)) * 100,
+      cy: 50,
+      r,
+    };
+  }
+  return {
+    cx: 50,
+    cy: (off / Math.max(1, widthMm)) * 100,
+    r,
+  };
+}
+
 function computeHolePunch(
   lengthMm: number,
   widthMm: number,
@@ -200,16 +243,6 @@ export function FlipPreviewModal() {
   const supportsBack = productConfig.supportsBackSide;
   const effectiveSide: "front" | "back" = supportsBack ? shownSide : "front";
 
-  // Hole punch in BLEED-SNAPSHOT space → also valid in face-display space
-  // after a proportional rescale. We pass the snapshot dimensions and let
-  // SnapshotFace project them onto its rendered size.
-  const liveHolePx = computeHolePunch(
-    lengthMm,
-    widthMm,
-    productConfig.visualGuides,
-    tagOrientation
-  );
-
   return (
     <div
       role="dialog"
@@ -250,8 +283,16 @@ export function FlipPreviewModal() {
             transition: supportsBack
               ? "transform 700ms cubic-bezier(0.4, 0.0, 0.2, 1)"
               : "none",
-            transform:
-              effectiveSide === "front" ? "rotateY(0deg)" : "rotateY(180deg)",
+            // Flip axis tracks the tag's hang edge — vertical tags
+            // hinge left↔right (rotateY), horizontal tags hinge
+            // top↔bottom (rotateX).
+            transform: (() => {
+              const horizontal = lengthMm > widthMm;
+              const axis = horizontal ? "X" : "Y";
+              return effectiveSide === "front"
+                ? `rotate${axis}(0deg)`
+                : `rotate${axis}(180deg)`;
+            })(),
           }}
         >
           <SnapshotFace
@@ -267,9 +308,12 @@ export function FlipPreviewModal() {
             textureSize={getTextureSize(productConfig.handle)}
             blendMode={productConfig.textureOverlayBlendMode}
             opacity={productConfig.textureOverlayOpacity}
-            hole={liveHolePx}
-            displayDims={dims}
-            snapshotDims={{ w: lengthMm * MM_TO_PX, h: widthMm * MM_TO_PX }}
+            holePct={holePunchPct(
+              lengthMm,
+              widthMm,
+              productConfig.visualGuides,
+              tagOrientation
+            )}
           />
           {supportsBack && (
             <SnapshotFace
@@ -288,17 +332,12 @@ export function FlipPreviewModal() {
               textureSize={getTextureSize(productConfig.handle)}
               blendMode={productConfig.textureOverlayBlendMode}
               opacity={productConfig.textureOverlayOpacity}
-              hole={computeHolePunch(
+              holePct={holePunchPct(
                 backDesign?.lengthMm ?? lengthMm,
                 backDesign?.widthMm ?? widthMm,
                 productConfig.visualGuides,
                 backDesign?.tagOrientation ?? tagOrientation
               )}
-              displayDims={dims}
-              snapshotDims={{
-                w: (backDesign?.lengthMm ?? lengthMm) * MM_TO_PX,
-                h: (backDesign?.widthMm ?? widthMm) * MM_TO_PX,
-              }}
             />
           )}
         </div>
@@ -372,9 +411,7 @@ function SnapshotFace({
   textureSize,
   blendMode,
   opacity,
-  hole,
-  displayDims,
-  snapshotDims,
+  holePct,
 }: {
   url: string | null;
   label: string;
@@ -389,9 +426,7 @@ function SnapshotFace({
   textureSize: string;
   blendMode: "multiply" | "overlay" | "soft-light" | "hard-light";
   opacity: number;
-  hole: HolePunchPx | null;
-  displayDims: { w: number; h: number };
-  snapshotDims: { w: number; h: number };
+  holePct: { cx: number; cy: number; r: number } | null;
 }) {
   const { clipPath, borderRadius } = silhouetteCss(
     shape,
@@ -401,26 +436,17 @@ function SnapshotFace({
     widthMm
   );
 
-  // Project hole position from snapshot px → display px so the brass
-  // grommet sits exactly above the alpha-punched hole.
-  let grommetLeft: number | null = null;
-  let grommetTop: number | null = null;
-  let grommetR: number | null = null;
-  if (hole && snapshotDims.w > 0 && snapshotDims.h > 0) {
-    const sx = displayDims.w / snapshotDims.w;
-    const sy = displayDims.h / snapshotDims.h;
-    grommetLeft = hole.cx * sx;
-    grommetTop = hole.cy * sy;
-    grommetR = hole.r * ((sx + sy) / 2);
-  }
-
+  // Back face is pre-rotated 180° along the SAME axis the card flips
+  // on, so it lands upright when the card finishes its rotation. Axis
+  // must match the parent (`lengthMm > widthMm` → X-axis, else Y).
+  const backAxis = lengthMm > widthMm ? "X" : "Y";
   return (
     <div
       aria-label={label}
       className="absolute inset-0"
       style={{
         backfaceVisibility: "hidden",
-        transform: isBack ? "rotateY(180deg)" : undefined,
+        transform: isBack ? `rotate${backAxis}(180deg)` : undefined,
       }}
     >
       <div
@@ -456,124 +482,29 @@ function SnapshotFace({
             }}
           />
         )}
+        {holePct && (
+          <div
+            aria-hidden
+            className="absolute pointer-events-none rounded-full"
+            style={{
+              left: `${holePct.cx}%`,
+              top: `${holePct.cy}%`,
+              width: `${holePct.r * 2}%`,
+              // Keep the hole circular regardless of face aspect: width
+              // is a %% of length, but height must be the SAME px count.
+              // Use aspect-ratio on a square child via CSS calc isn't
+              // trivial here — we let the parent be width-driven and
+              // override height in absolute terms via padding-bottom.
+              aspectRatio: "1 / 1",
+              transform: "translate(-50%, -50%)",
+              background: "#ffffff",
+              boxShadow:
+                "inset 0 1px 3px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.08)",
+            }}
+          />
+        )}
       </div>
-
-      {/* Brass grommet — placed AFTER the clipped card so it draws on top
-          of the punched hole. The PNG already has alpha-zero at the
-          hole's centre; the grommet fills it with photoreal eyelet. */}
-      {grommetLeft != null && grommetTop != null && grommetR != null && (
-        <BrassGrommet
-          left={grommetLeft}
-          top={grommetTop}
-          radius={grommetR}
-          uid={label.toLowerCase()}
-        />
-      )}
     </div>
-  );
-}
-
-/**
- * Photoreal brass grommet — a true annulus. The centre is a real SVG
- * hole (carved out via a `<mask>`), not a fill, so whatever sits behind
- * the modal (the dark backdrop, or in the future a twine strand) shows
- * straight through it — visually reading as a physical eyelet you can
- * pass a thread through.
- */
-function BrassGrommet({
-  left,
-  top,
-  radius,
-  uid,
-}: {
-  left: number;
-  top: number;
-  radius: number;
-  uid: string;
-}) {
-  // Outer eyelet ~1.7× the punched hole; inner hole sized at the
-  // alpha-punched radius so the grommet rim sits flush.
-  const outerR = radius * 1.7;
-  const innerR = radius * 0.95;
-  const size = outerR * 2;
-  // Unique IDs so multiple grommets on the page don't collide.
-  const ringId = `brassRing-${uid}`;
-  const maskId = `grommetMask-${uid}`;
-  const innerShadowId = `grommetInnerShadow-${uid}`;
-  return (
-    <svg
-      aria-hidden
-      className="absolute pointer-events-none"
-      width={size}
-      height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      style={{
-        left: left - outerR,
-        top: top - outerR,
-        filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.55))",
-      }}
-    >
-      <defs>
-        <radialGradient
-          id={ringId}
-          cx="50%"
-          cy="40%"
-          r="55%"
-          fx="50%"
-          fy="32%"
-        >
-          <stop offset="0%" stopColor="#ffe7a0" />
-          <stop offset="32%" stopColor="#e0b25b" />
-          <stop offset="62%" stopColor="#a87826" />
-          <stop offset="100%" stopColor="#5b3f12" />
-        </radialGradient>
-        {/* Mask carves the inner circle out of the brass disc so the
-            grommet is a TRUE annulus — the centre is transparent in SVG
-            terms, not just filled with "transparent" colour. */}
-        <mask id={maskId}>
-          <rect width={size} height={size} fill="white" />
-          <circle cx={outerR} cy={outerR} r={innerR} fill="black" />
-        </mask>
-        <radialGradient id={innerShadowId} cx="50%" cy="50%" r="50%">
-          <stop offset="65%" stopColor="rgba(0,0,0,0)" />
-          <stop offset="100%" stopColor="rgba(0,0,0,0.6)" />
-        </radialGradient>
-      </defs>
-      {/* Brass annulus — outer disc with the inner circle masked out. */}
-      <circle
-        cx={outerR}
-        cy={outerR}
-        r={outerR}
-        fill={`url(#${ringId})`}
-        mask={`url(#${maskId})`}
-      />
-      {/* Soft inner shadow around the hole rim — sells the depth. */}
-      <circle
-        cx={outerR}
-        cy={outerR}
-        r={innerR + outerR * 0.04}
-        fill="none"
-        stroke={`url(#${innerShadowId})`}
-        strokeWidth={outerR * 0.07}
-      />
-      {/* Top-left rim highlight — warm crescent simulating overhead light. */}
-      <path
-        d={`M ${outerR - outerR * 0.7} ${outerR - outerR * 0.45} A ${outerR * 0.85} ${outerR * 0.85} 0 0 1 ${outerR + outerR * 0.55} ${outerR - outerR * 0.6}`}
-        fill="none"
-        stroke="rgba(255,238,180,0.85)"
-        strokeWidth={outerR * 0.07}
-        strokeLinecap="round"
-      />
-      {/* Crisp inner edge — defines the hole's circumference. */}
-      <circle
-        cx={outerR}
-        cy={outerR}
-        r={innerR}
-        fill="none"
-        stroke="rgba(0,0,0,0.55)"
-        strokeWidth={Math.max(1, outerR * 0.05)}
-      />
-    </svg>
   );
 }
 
@@ -589,15 +520,19 @@ function silhouetteCss(
   const isHorizontal = tagOrientation === "horizontal";
   const cornersMode = modifiers.cornersMode;
   const maxModMm = Math.max(1, Math.min(lengthMm, widthMm)) * 0.4;
-  const pctX = (mm: number) =>
-    (Math.max(0, Math.min(mm, maxModMm)) / Math.max(1, lengthMm)) * 100;
-  const pctY = (mm: number) =>
-    (Math.max(0, Math.min(mm, maxModMm)) / Math.max(1, widthMm)) * 100;
+  // `pctX` / `pctY` were originally written to clamp shape MODIFIER
+  // values (corner radius, slant length) to the 40 % short-edge cap.
+  // They MUST NOT clamp arbitrary coordinates like `lengthMm/2` —
+  // doing so produced invalid percentages for the polygon builders.
+  // Modifier values are clamped by the caller via `maxModMm`.
+  const pctX = (mm: number) => (mm / Math.max(1, lengthMm)) * 100;
+  const pctY = (mm: number) => (mm / Math.max(1, widthMm)) * 100;
 
   switch (shape) {
     case "round-corners": {
-      const rx = pctX(modifiers.cornerRadiusMm).toFixed(2);
-      const ry = pctY(modifiers.cornerRadiusMm).toFixed(2);
+      const clampedR = Math.max(0, Math.min(modifiers.cornerRadiusMm, maxModMm));
+      const rx = pctX(clampedR).toFixed(2);
+      const ry = pctY(clampedR).toFixed(2);
       if (cornersMode === "all") {
         return { borderRadius: `${rx}% / ${ry}%` };
       }
@@ -611,8 +546,9 @@ function silhouetteCss(
       };
     }
     case "cut-corners": {
-      const cx = pctX(modifiers.slantLengthMm).toFixed(2);
-      const cy = pctY(modifiers.slantLengthMm).toFixed(2);
+      const clampedS = Math.max(0, Math.min(modifiers.slantLengthMm, maxModMm));
+      const cx = pctX(clampedS).toFixed(2);
+      const cy = pctY(clampedS).toFixed(2);
       if (cornersMode === "all") {
         return {
           clipPath: `polygon(${cx}% 0, ${100 - +cx}% 0, 100% ${cy}%, 100% ${100 - +cy}%, ${100 - +cx}% 100%, ${cx}% 100%, 0 ${100 - +cy}%, 0 ${cy}%)`,
@@ -658,6 +594,17 @@ function silhouetteCss(
         0,
         Math.min(modifiers.slantLengthMm, maxModMm)
       );
+      if (isHorizontal) {
+        // Apex on the RIGHT short edge.
+        const pts = [
+          `100% ${pctY(widthMm / 2).toFixed(3)}%`,
+          `${pctX(lengthMm - pMm).toFixed(3)}% 100%`,
+          `0% 100%`,
+          `0% 0%`,
+          `${pctX(lengthMm - pMm).toFixed(3)}% 0%`,
+        ];
+        return { clipPath: `polygon(${pts.join(", ")})` };
+      }
       const pts = [
         `${pctX(lengthMm / 2).toFixed(3)}% 0%`,
         `100% ${pctY(pMm).toFixed(3)}%`,
@@ -672,6 +619,18 @@ function silhouetteCss(
         0,
         Math.min(modifiers.slantLengthMm, maxModMm)
       );
+      if (isHorizontal) {
+        // Apexes on LEFT + RIGHT short edges.
+        const pts = [
+          `100% ${pctY(widthMm / 2).toFixed(3)}%`,
+          `${pctX(lengthMm - pMm).toFixed(3)}% 100%`,
+          `${pctX(pMm).toFixed(3)}% 100%`,
+          `0% ${pctY(widthMm / 2).toFixed(3)}%`,
+          `${pctX(pMm).toFixed(3)}% 0%`,
+          `${pctX(lengthMm - pMm).toFixed(3)}% 0%`,
+        ];
+        return { clipPath: `polygon(${pts.join(", ")})` };
+      }
       const pts = [
         `${pctX(lengthMm / 2).toFixed(3)}% 0%`,
         `100% ${pctY(pMm).toFixed(3)}%`,
@@ -683,11 +642,11 @@ function silhouetteCss(
       return { clipPath: `polygon(${pts.join(", ")})` };
     }
     case "flared": {
-      const dMm = Math.max(
-        0,
-        Math.min(modifiers.slantLengthMm, lengthMm * 0.35)
-      );
-      return { clipPath: flaredClipPolygon(dMm, lengthMm, widthMm, pctX, pctY) };
+      const longEdgeMm = isHorizontal ? widthMm : lengthMm;
+      const dMm = Math.max(0, Math.min(modifiers.slantLengthMm, longEdgeMm * 0.35));
+      return {
+        clipPath: flaredClipPolygon(dMm, lengthMm, widthMm, pctX, pctY, isHorizontal),
+      };
     }
     case "mixed-cut-round": {
       const cMm = Math.max(
@@ -695,12 +654,362 @@ function silhouetteCss(
         Math.min(modifiers.slantLengthMm, maxModMm)
       );
       return {
-        clipPath: mixedCutRoundClipPolygon(cMm, lengthMm, widthMm, pctX, pctY),
+        clipPath: mixedCutRoundClipPolygon(
+          cMm, lengthMm, widthMm, pctX, pctY, isHorizontal
+        ),
+      };
+    }
+    case "boutique": {
+      const shortEdgeMm = isHorizontal ? lengthMm : widthMm;
+      const dMm = Math.max(0, Math.min(modifiers.slantLengthMm, shortEdgeMm * 0.45));
+      return {
+        clipPath: boutiqueClipPolygon(
+          dMm, lengthMm, widthMm, pctX, pctY, isHorizontal
+        ),
+      };
+    }
+    case "arch":
+      return {
+        clipPath: archClipPolygon(lengthMm, widthMm, pctX, pctY, isHorizontal),
+      };
+    case "barrel": {
+      const shortEdgeMm = isHorizontal ? lengthMm : widthMm;
+      const bMm = Math.max(0, Math.min(modifiers.slantLengthMm, shortEdgeMm * 0.45));
+      return {
+        clipPath: barrelClipPolygon(
+          bMm, lengthMm, widthMm, pctX, pctY, isHorizontal
+        ),
+      };
+    }
+    case "pill":
+      return { clipPath: pillClipPolygon(lengthMm, widthMm, pctX, pctY) };
+    case "ticket": {
+      const nMm = Math.max(0, Math.min(modifiers.cornerRadiusMm, maxModMm));
+      return {
+        clipPath: ticketClipPolygon(nMm, lengthMm, widthMm, pctX, pctY),
       };
     }
     default:
       return {};
   }
+}
+
+/* ----- Polygon approximations for the extended premium shapes ----- */
+
+function boutiqueClipPolygon(
+  depthMm: number,
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number,
+  isHorizontal: boolean
+): string {
+  const steps = 12;
+  const pts: string[] = [];
+  const cubic = (
+    p0x: number, p0y: number,
+    p1x: number, p1y: number,
+    p2x: number, p2y: number,
+    p3x: number, p3y: number,
+    t: number
+  ) => {
+    const it = 1 - t;
+    const x = it*it*it*p0x + 3*it*it*t*p1x + 3*it*t*t*p2x + t*t*t*p3x;
+    const y = it*it*it*p0y + 3*it*it*t*p1y + 3*it*t*t*p2y + t*t*t*p3y;
+    return [x, y];
+  };
+  if (isHorizontal) {
+    // Profile on the RIGHT short edge: shoulders at (L-d, 0) and (L-d, W),
+    // apex at (L, W/2). Two cubic Beziers mirror across the horizontal midline.
+    const d = Math.max(0, Math.min(depthMm, lengthMm * 0.45));
+    pts.push(`0% 0%`, `${pctX(lengthMm - d).toFixed(3)}% 0%`);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const [x, y] = cubic(
+        lengthMm - d, 0,
+        lengthMm - d, widthMm * 0.15,
+        lengthMm, widthMm * 0.3,
+        lengthMm, widthMm / 2,
+        t
+      );
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const [x, y] = cubic(
+        lengthMm, widthMm / 2,
+        lengthMm, widthMm * 0.7,
+        lengthMm - d, widthMm * 0.85,
+        lengthMm - d, widthMm,
+        t
+      );
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+    pts.push(`0% 100%`);
+    return `polygon(${pts.join(", ")})`;
+  }
+  const d = Math.max(0, Math.min(depthMm, widthMm * 0.45));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = cubic(
+      0, d, lengthMm * 0.15, d, lengthMm * 0.3, 0, lengthMm / 2, 0, t
+    );
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = cubic(
+      lengthMm / 2, 0, lengthMm * 0.7, 0, lengthMm * 0.85, d, lengthMm, d, t
+    );
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  pts.push(`100% 100%`, `0% 100%`);
+  return `polygon(${pts.join(", ")})`;
+}
+
+function archClipPolygon(
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number,
+  isHorizontal: boolean
+): string {
+  const steps = 16;
+  const pts: string[] = [];
+  if (isHorizontal) {
+    // Arc on the RIGHT edge. Semi-arc from (L-arcW, 0) → (L-arcW, W) via (L, W/2).
+    const r = widthMm / 2;
+    const arcW = Math.min(r, lengthMm * 0.5);
+    pts.push(`0% 0%`, `${pctX(lengthMm - arcW).toFixed(3)}% 0%`);
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const theta = -Math.PI / 2 + Math.PI * t;
+      const x = lengthMm - arcW + Math.cos(theta) * arcW;
+      const y = widthMm / 2 + Math.sin(theta) * r;
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+    pts.push(`0% 100%`);
+    return `polygon(${pts.join(", ")})`;
+  }
+  const r = lengthMm / 2;
+  const arcH = Math.min(r, widthMm * 0.5);
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const theta = Math.PI - Math.PI * t;
+    const x = lengthMm / 2 + Math.cos(theta) * r;
+    const y = arcH - Math.sin(theta) * arcH;
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  pts.push(`100% 100%`, `0% 100%`);
+  return `polygon(${pts.join(", ")})`;
+}
+
+function barrelClipPolygon(
+  bulgeMm: number,
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number,
+  isHorizontal: boolean
+): string {
+  const steps = 12;
+  const pts: string[] = [];
+  // Mirror the cubic Bezier used by barrelPath (Workspace.tsx) so the
+  // modal silhouette matches the canvas exactly. Control coordinate
+  // along the bulge axis is `-d/3` → peak touches the bleed edge at
+  // midpoint and the curve leaves the corner tangentially (no kink).
+  const sampleCubic = (
+    p0x: number, p0y: number,
+    p1x: number, p1y: number,
+    p2x: number, p2y: number,
+    p3x: number, p3y: number,
+    t: number
+  ): [number, number] => {
+    const it = 1 - t;
+    return [
+      it * it * it * p0x + 3 * it * it * t * p1x + 3 * it * t * t * p2x + t * t * t * p3x,
+      it * it * it * p0y + 3 * it * it * t * p1y + 3 * it * t * t * p2y + t * t * t * p3y,
+    ];
+  };
+  if (isHorizontal) {
+    const d = Math.max(0, Math.min(bulgeMm, lengthMm * 0.45));
+    const k = d / 3;
+    pts.push(`${pctX(d).toFixed(3)}% 0%`, `${pctX(lengthMm - d).toFixed(3)}% 0%`);
+    // Right bulge — cubic from (L-d, 0) to (L-d, W), peaks at (L, W/2).
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const [x, y] = sampleCubic(
+        lengthMm - d, 0,
+        lengthMm + k, 0,
+        lengthMm + k, widthMm,
+        lengthMm - d, widthMm,
+        t
+      );
+      pts.push(
+        `${pctX(Math.min(lengthMm, x)).toFixed(3)}% ${pctY(y).toFixed(3)}%`
+      );
+    }
+    pts.push(`${pctX(d).toFixed(3)}% 100%`);
+    // Left bulge — cubic from (d, W) to (d, 0), peaks at (0, W/2).
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const [x, y] = sampleCubic(
+        d, widthMm,
+        -k, widthMm,
+        -k, 0,
+        d, 0,
+        t
+      );
+      pts.push(
+        `${pctX(Math.max(0, x)).toFixed(3)}% ${pctY(y).toFixed(3)}%`
+      );
+    }
+    return `polygon(${pts.join(", ")})`;
+  }
+  const d = Math.max(0, Math.min(bulgeMm, widthMm * 0.45));
+  const k = d / 3;
+  // Top bulge — cubic from (0, d) to (w, d), peaks at (w/2, 0).
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = sampleCubic(
+      0, d,
+      0, -k,
+      lengthMm, -k,
+      lengthMm, d,
+      t
+    );
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(Math.max(0, y)).toFixed(3)}%`);
+  }
+  pts.push(`100% ${pctY(widthMm - d).toFixed(3)}%`);
+  // Bottom bulge — cubic from (w, h-d) to (0, h-d), peaks at (w/2, h).
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = sampleCubic(
+      lengthMm, widthMm - d,
+      lengthMm, widthMm + k,
+      0, widthMm + k,
+      0, widthMm - d,
+      t
+    );
+    pts.push(
+      `${pctX(x).toFixed(3)}% ${pctY(Math.min(widthMm, y)).toFixed(3)}%`
+    );
+  }
+  return `polygon(${pts.join(", ")})`;
+}
+
+function pillClipPolygon(
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number
+): string {
+  const steps = 12;
+  const pts: string[] = [];
+  if (widthMm >= lengthMm) {
+    // Tall pill — top + bottom semi-circles of radius w/2
+    const r = lengthMm / 2;
+    // Top semi-circle: (0, r) → (w, r) via (w/2, 0)
+    for (let i = 0; i <= steps; i++) {
+      const theta = Math.PI - Math.PI * (i / steps);
+      const x = lengthMm / 2 + Math.cos(theta) * r;
+      const y = r - Math.sin(theta) * r;
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+    // Bottom semi-circle: (w, h-r) → (0, h-r) via (w/2, h)
+    for (let i = 1; i <= steps; i++) {
+      const theta = -Math.PI * (i / steps);
+      const x = lengthMm / 2 + Math.cos(theta) * r;
+      const y = widthMm - r - Math.sin(theta) * r;
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+  } else {
+    // Wide pill — left + right semi-circles of radius h/2
+    const r = widthMm / 2;
+    // Right semi-circle: (w-r, 0) → (w-r, h) via (w, h/2)
+    pts.push(`${pctX(r).toFixed(3)}% 0%`);
+    pts.push(`${pctX(lengthMm - r).toFixed(3)}% 0%`);
+    for (let i = 0; i <= steps; i++) {
+      const theta = -Math.PI / 2 + Math.PI * (i / steps);
+      const x = lengthMm - r + Math.cos(theta) * r;
+      const y = widthMm / 2 + Math.sin(theta) * r;
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+    // Bottom edge to BL
+    pts.push(`${pctX(r).toFixed(3)}% 100%`);
+    // Left semi-circle: (r, h) → (r, 0) via (0, h/2)
+    for (let i = 0; i <= steps; i++) {
+      const theta = Math.PI / 2 + Math.PI * (i / steps);
+      const x = r + Math.cos(theta) * r;
+      const y = widthMm / 2 + Math.sin(theta) * r;
+      pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+    }
+  }
+  return `polygon(${pts.join(", ")})`;
+}
+
+function ticketClipPolygon(
+  notchMm: number,
+  lengthMm: number,
+  widthMm: number,
+  pctX: (mm: number) => number,
+  pctY: (mm: number) => number
+): string {
+  const r = Math.max(0, Math.min(notchMm, lengthMm * 0.4, widthMm * 0.4));
+  const steps = 6;
+  const pts: string[] = [];
+  // Quadratic Bezier helper
+  const quad = (
+    p0x: number, p0y: number,
+    p1x: number, p1y: number,
+    p2x: number, p2y: number,
+    t: number
+  ) => {
+    const it = 1 - t;
+    return [
+      it * it * p0x + 2 * it * t * p1x + t * t * p2x,
+      it * it * p0y + 2 * it * t * p1y + t * t * p2y,
+    ];
+  };
+  // TL notch: (r, 0) curves via (r, r) to (0, r)  → here we ENTER the
+  // shape at (r, 0). Start there.
+  pts.push(`${pctX(r).toFixed(3)}% 0%`);
+  pts.push(`${pctX(lengthMm - r).toFixed(3)}% 0%`);
+  // TR notch: from (w-r, 0) via (w-r, r) to (w, r)
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = quad(
+      lengthMm - r, 0, lengthMm - r, r, lengthMm, r, t
+    );
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  pts.push(`100% ${pctY(widthMm - r).toFixed(3)}%`);
+  // BR notch: from (w, h-r) via (w-r, h-r) to (w-r, h)
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = quad(
+      lengthMm, widthMm - r,
+      lengthMm - r, widthMm - r,
+      lengthMm - r, widthMm,
+      t
+    );
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  pts.push(`${pctX(r).toFixed(3)}% 100%`);
+  // BL notch: from (r, h) via (r, h-r) to (0, h-r)
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const [x, y] = quad(r, widthMm, r, widthMm - r, 0, widthMm - r, t);
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  pts.push(`0% ${pctY(r).toFixed(3)}%`);
+  // TL notch: from (0, r) via (r, r) to (r, 0) — closes back to start
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const [x, y] = quad(0, r, r, r, r, 0, t);
+    pts.push(`${pctX(x).toFixed(3)}% ${pctY(y).toFixed(3)}%`);
+  }
+  return `polygon(${pts.join(", ")})`;
 }
 
 /* ----- Polygon approximations for curved shapes (CSS clip-path) ---- */
@@ -776,13 +1085,34 @@ function flaredClipPolygon(
   lengthMm: number,
   widthMm: number,
   pctX: (mm: number) => number,
-  pctY: (mm: number) => number
+  pctY: (mm: number) => number,
+  isHorizontal: boolean
 ): string {
-  const d = Math.max(0, Math.min(dMm, lengthMm * 0.35));
   const steps = 10;
+  if (isHorizontal) {
+    // Long edges (top + bottom) curve inward. Short edges (left + right) straight.
+    const d = Math.max(0, Math.min(dMm, widthMm * 0.35));
+    const pts: string[] = ["0% 0%"];
+    // Top curve from (0,0) → (L,0), control (L/2, d) → y(t) = 2(1-t)t*d
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const xMm = lengthMm * t;
+      const yMm = 2 * (1 - t) * t * d;
+      pts.push(`${pctX(xMm).toFixed(3)}% ${pctY(yMm).toFixed(3)}%`);
+    }
+    pts.push("100% 0%", "100% 100%");
+    // Bottom curve from (L,W) → (0,W), control (L/2, W-d)
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const xMm = lengthMm * (1 - t);
+      const yMm = widthMm - 2 * (1 - t) * t * d;
+      pts.push(`${pctX(xMm).toFixed(3)}% ${pctY(yMm).toFixed(3)}%`);
+    }
+    pts.push("0% 100%");
+    return `polygon(${pts.join(", ")})`;
+  }
+  const d = Math.max(0, Math.min(dMm, lengthMm * 0.35));
   const pts: string[] = ["0% 0%", "100% 0%"];
-  // Right side curve (top-right → bottom-right), quadratic Bezier
-  // P0=(w,0), P1=(w-d, h/2), P2=(w,h) → x(t) = w - 2(1-t)t*d, y(t) = h*t
   for (let i = 1; i < steps; i++) {
     const t = i / steps;
     const xMm = lengthMm - 2 * (1 - t) * t * d;
@@ -790,8 +1120,6 @@ function flaredClipPolygon(
     pts.push(`${pctX(xMm).toFixed(3)}% ${pctY(yMm).toFixed(3)}%`);
   }
   pts.push("100% 100%", "0% 100%");
-  // Left side curve (bottom-left → top-left), mirror
-  // P0=(0,h), P1=(d, h/2), P2=(0,0) → x(t) = 2(1-t)t*d, y(t) = h(1-t)
   for (let i = 1; i < steps; i++) {
     const t = i / steps;
     const xMm = 2 * (1 - t) * t * d;
@@ -806,17 +1134,35 @@ function mixedCutRoundClipPolygon(
   lengthMm: number,
   widthMm: number,
   pctX: (mm: number) => number,
-  pctY: (mm: number) => number
+  pctY: (mm: number) => number,
+  isHorizontal: boolean
 ): string {
   const c = Math.max(0, Math.min(cMm, lengthMm * 0.4, widthMm * 0.4));
   const steps = 8;
+  if (isHorizontal) {
+    // Cut on the RIGHT corners (TR + BR), round on the LEFT corners (TL + BL).
+    const pts: string[] = [];
+    // TL rounded: arc from (0, c) to (c, 0), centre (c, c), π → 3π/2
+    pts.push(...arcPoints(c, c, c, Math.PI, 1.5 * Math.PI, steps, pctX, pctY));
+    pts.push(
+      `${pctX(lengthMm - c).toFixed(3)}% 0%`,
+      `100% ${pctY(c).toFixed(3)}%`,
+      `100% ${pctY(widthMm - c).toFixed(3)}%`,
+      `${pctX(lengthMm - c).toFixed(3)}% 100%`,
+      `${pctX(c).toFixed(3)}% 100%`
+    );
+    // BL rounded: arc from (c, h) to (0, h-c), centre (c, h-c), π/2 → π
+    pts.push(
+      ...arcPoints(c, widthMm - c, c, Math.PI / 2, Math.PI, steps, pctX, pctY)
+    );
+    return `polygon(${pts.join(", ")})`;
+  }
   const pts: string[] = [
     `${pctX(c).toFixed(3)}% 0%`,
     `${pctX(lengthMm - c).toFixed(3)}% 0%`,
     `100% ${pctY(c).toFixed(3)}%`,
     `100% ${pctY(widthMm - c).toFixed(3)}%`,
   ];
-  // BR rounded: arc from (w, h-c) to (w-c, h), centre (w-c, h-c), 0 → π/2
   pts.push(
     ...arcPoints(
       lengthMm - c,
@@ -830,7 +1176,6 @@ function mixedCutRoundClipPolygon(
     )
   );
   pts.push(`${pctX(c).toFixed(3)}% 100%`);
-  // BL rounded: arc from (c, h) to (0, h-c), centre (c, h-c), π/2 → π
   pts.push(
     ...arcPoints(c, widthMm - c, c, Math.PI / 2, Math.PI, steps, pctX, pctY)
   );

@@ -6,10 +6,12 @@ import { HistoryManager } from "@/lib/history";
 import { _registerHistory, history } from "@/lib/historyAccessor";
 import { Autosave, loadSavedDesign, syncWorkIdToUrl } from "@/lib/autosave";
 import { useSmartGuides } from "@/lib/useSmartGuides";
+import { analyzeImageElementSharpness } from "@/lib/imageQuality";
 import { TopContextualToolbar } from "./TopContextualToolbar";
 import { ObjectActionMenu } from "./ObjectActionMenu";
 import { RevertToTemplate } from "./RevertToTemplate";
 import { SideToggle } from "./SideToggle";
+import { WarningToast } from "./WarningToast";
 
 /**
  * Virtual workspace constants.
@@ -239,8 +241,11 @@ function scallopedPath(w: number, h: number, r: number): string {
 
 /**
  * Points (absolute canvas coords) for a POINTED-TOP tag — triangular
- * apex on the top edge, square bottom. `pointHeight` is the depth of
- * the triangular point in px (clamped to half the shorter axis).
+ * apex on the SHORT-AXIS edge that the tag hangs from. `pointHeight`
+ * is the depth of the triangular point in px.
+ *   - vertical (w ≤ h)   → apex on TOP, square bottom
+ *   - horizontal (w > h) → apex on RIGHT, square left (the canonical
+ *                          "top" is rotated 90° clockwise to the right)
  */
 function pointedTopPoints(
   left: number,
@@ -249,9 +254,20 @@ function pointedTopPoints(
   h: number,
   pointHeight: number
 ): { x: number; y: number }[] {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const p = Math.max(0, Math.min(pointHeight, h * 0.5, w * 0.45));
+    return [
+      { x: left + w, y: top + h / 2 }, // apex on RIGHT
+      { x: left + w - p, y: top + h }, // bottom-right after the slope
+      { x: left, y: top + h }, // bottom-left
+      { x: left, y: top }, // top-left
+      { x: left + w - p, y: top }, // top-right after the slope
+    ];
+  }
   const p = Math.max(0, Math.min(pointHeight, w * 0.5, h * 0.45));
   return [
-    { x: left + w / 2, y: top }, // apex
+    { x: left + w / 2, y: top }, // apex on TOP
     { x: left + w, y: top + p }, // top-right after the slope
     { x: left + w, y: top + h }, // bottom-right
     { x: left, y: top + h }, // bottom-left
@@ -260,9 +276,11 @@ function pointedTopPoints(
 }
 
 /**
- * Points for a HEXAGON-POINTED tag — single apex on top AND bottom,
- * straight vertical sides. `pointHeight` controls the depth of BOTH
- * apex triangles.
+ * Points for a HEXAGON-POINTED tag — single apex on both short-axis
+ * edges, straight long-axis sides. `pointHeight` controls the depth of
+ * BOTH apex triangles.
+ *   - vertical (w ≤ h)   → apexes on TOP + BOTTOM, vertical long sides
+ *   - horizontal (w > h) → apexes on LEFT + RIGHT, horizontal long sides
  */
 function hexagonPointedPoints(
   left: number,
@@ -271,6 +289,18 @@ function hexagonPointedPoints(
   h: number,
   pointHeight: number
 ): { x: number; y: number }[] {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const p = Math.max(0, Math.min(pointHeight, h * 0.5, w * 0.4));
+    return [
+      { x: left + w, y: top + h / 2 }, // right apex
+      { x: left + w - p, y: top + h },
+      { x: left + p, y: top + h },
+      { x: left, y: top + h / 2 }, // left apex
+      { x: left + p, y: top },
+      { x: left + w - p, y: top },
+    ];
+  }
   const p = Math.max(0, Math.min(pointHeight, w * 0.5, h * 0.4));
   return [
     { x: left + w / 2, y: top }, // top apex
@@ -283,11 +313,26 @@ function hexagonPointedPoints(
 }
 
 /**
- * SVG path data for a FLARED tag — top + bottom edges straight, left
- * and right sides curve INWARD (concave waist). `waist` is the maximum
- * horizontal inset at the midpoint of each vertical side.
+ * SVG path data for a FLARED tag — the two LONG edges curve inward
+ * (concave waist), the two SHORT edges stay straight. `waist` is the
+ * maximum inset at the midpoint of each long side.
+ *   - vertical (w ≤ h)   → vertical sides curve in, top + bottom straight
+ *   - horizontal (w > h) → top + bottom curve in, left + right straight
  */
 function flaredPath(w: number, h: number, waist: number): string {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const d = Math.max(0, Math.min(waist, h * 0.35));
+    return [
+      `M 0 0`,
+      // Top edge curves inward — control point pulled DOWN toward centre.
+      `Q ${w / 2} ${d} ${w} 0`,
+      `L ${w} ${h}`,
+      // Bottom edge mirrors — control point pulled UP toward centre.
+      `Q ${w / 2} ${h - d} 0 ${h}`,
+      "Z",
+    ].join(" ");
+  }
   const d = Math.max(0, Math.min(waist, w * 0.35));
   return [
     `M 0 0`,
@@ -303,13 +348,28 @@ function flaredPath(w: number, h: number, waist: number): string {
 }
 
 /**
- * SVG path data for a MIXED-CUT-ROUND tag — angled cut on the TOP two
- * corners (like cut-corners) + rounded arc on the BOTTOM two corners
- * (like round-corners). Single `corner` value drives both so the slant
- * length matches the bottom radius for a balanced silhouette.
+ * SVG path data for a MIXED-CUT-ROUND tag — angled cut on the two
+ * corners adjacent to the hang edge + rounded arc on the opposite two
+ * corners. Single `corner` value drives both for a balanced silhouette.
+ *   - vertical (w ≤ h)   → cut TL + TR, round BL + BR
+ *   - horizontal (w > h) → cut TR + BR (right hang edge), round TL + BL
  */
 function mixedCutRoundPath(w: number, h: number, corner: number): string {
+  const isHorizontal = w > h;
   const c = Math.max(0, Math.min(corner, w * 0.4, h * 0.4));
+  if (isHorizontal) {
+    return [
+      `M 0 ${c}`,
+      `A ${c} ${c} 0 0 1 ${c} 0`, // rounded TL
+      `L ${w - c} 0`,
+      `L ${w} ${c}`, // angled cut TR
+      `L ${w} ${h - c}`,
+      `L ${w - c} ${h}`, // angled cut BR
+      `L ${c} ${h}`,
+      `A ${c} ${c} 0 0 1 0 ${h - c}`, // rounded BL
+      "Z",
+    ].join(" ");
+  }
   return [
     `M ${c} 0`,
     `L ${w - c} 0`,
@@ -320,6 +380,163 @@ function mixedCutRoundPath(w: number, h: number, corner: number): string {
     `A ${c} ${c} 0 0 1 0 ${h - c}`, // rounded bottom-left
     `L 0 ${c}`,
     `L ${c} 0`, // angled cut top-left
+    "Z",
+  ].join(" ");
+}
+
+/**
+ * SVG path data for a BOUTIQUE tag — ornate profile with concave
+ * shoulders flanking a central convex bump on the hang edge. The other
+ * three edges stay straight. `depth` is the height of the central bump
+ * above the shoulder line.
+ *   - vertical (w ≤ h)   → ornate profile on TOP
+ *   - horizontal (w > h) → ornate profile on RIGHT (rotated 90° CW)
+ */
+function boutiquePath(w: number, h: number, depth: number): string {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const d = Math.max(0, Math.min(depth, w * 0.45));
+    // Profile on the RIGHT edge: shoulders at (w-d, 0) and (w-d, h),
+    // apex at (w, h/2). Two cubic Beziers mirror across the midline.
+    return [
+      `M 0 0`,
+      `L ${w - d} 0`,
+      `C ${w - d} ${h * 0.15}, ${w} ${h * 0.3}, ${w} ${h / 2}`,
+      `C ${w} ${h * 0.7}, ${w - d} ${h * 0.85}, ${w - d} ${h}`,
+      `L 0 ${h}`,
+      "Z",
+    ].join(" ");
+  }
+  const d = Math.max(0, Math.min(depth, h * 0.45));
+  return [
+    `M 0 ${d}`,
+    `C ${w * 0.15} ${d}, ${w * 0.3} 0, ${w / 2} 0`,
+    `C ${w * 0.7} 0, ${w * 0.85} ${d}, ${w} ${d}`,
+    `L ${w} ${h}`,
+    `L 0 ${h}`,
+    "Z",
+  ].join(" ");
+}
+
+/**
+ * SVG path data for an ARCH (tombstone) tag — three square edges + one
+ * semi-circular hang edge. Half-arc when the tag is too short to hold
+ * a full semicircle so the silhouette never escapes the bleed.
+ *   - vertical (w ≤ h)   → arc on TOP edge, radius = w/2
+ *   - horizontal (w > h) → arc on RIGHT edge, radius = h/2
+ */
+function archPath(w: number, h: number): string {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const r = h / 2;
+    const arcW = Math.min(r, w * 0.5);
+    return [
+      `M 0 0`,
+      `L ${w - arcW} 0`,
+      `A ${arcW} ${r} 0 0 1 ${w - arcW} ${h}`,
+      `L 0 ${h}`,
+      "Z",
+    ].join(" ");
+  }
+  const r = w / 2;
+  const arcH = Math.min(r, h * 0.5);
+  return [
+    `M 0 ${arcH}`,
+    `A ${r} ${arcH} 0 0 1 ${w} ${arcH}`,
+    `L ${w} ${h}`,
+    `L 0 ${h}`,
+    "Z",
+  ].join(" ");
+}
+
+/**
+ * SVG path data for a BARREL (bent oval) tag — convex bulges on the
+ * two SHORT edges, straight long edges. Uses CUBIC Béziers with
+ * control points pulled out by `d/3` along the bulge axis so the curve
+ * leaves the corners with a TANGENT MATCHING the straight side (no
+ * visible kink) and peaks exactly on the bleed edge at midpoint.
+ *
+ * Math: cubic B(0.5) = (P0 + 3P1 + 3P2 + P3) / 8. With control coords
+ * `-d/3`, the bulge axis component is (d - d - d + d) / 8 = 0 — peak
+ * touches the bounding rect. Tangent at P0 is (P1 - P0) = (0, -4d/3),
+ * collinear with the straight side direction → smooth join.
+ *
+ *   - vertical (w ≤ h)   → bulges on TOP + BOTTOM
+ *   - horizontal (w > h) → bulges on LEFT + RIGHT
+ */
+function barrelPath(w: number, h: number, bulge: number): string {
+  const isHorizontal = w > h;
+  if (isHorizontal) {
+    const d = Math.max(0, Math.min(bulge, w * 0.45));
+    const k = d / 3;
+    return [
+      `M ${d} 0`,
+      `L ${w - d} 0`,
+      // Right bulge — peak at (w, h/2).
+      `C ${w + k} 0, ${w + k} ${h}, ${w - d} ${h}`,
+      `L ${d} ${h}`,
+      // Left bulge — peak at (0, h/2).
+      `C ${-k} ${h}, ${-k} 0, ${d} 0`,
+      "Z",
+    ].join(" ");
+  }
+  const d = Math.max(0, Math.min(bulge, h * 0.45));
+  const k = d / 3;
+  return [
+    `M 0 ${d}`,
+    // Top bulge — peak at (w/2, 0).
+    `C 0 ${-k}, ${w} ${-k}, ${w} ${d}`,
+    `L ${w} ${h - d}`,
+    // Bottom bulge — peak at (w/2, h).
+    `C ${w} ${h + k}, 0 ${h + k}, 0 ${h - d}`,
+    "Z",
+  ].join(" ");
+}
+
+/**
+ * SVG path data for a PILL (capsule) tag — the SHORT pair of edges is
+ * replaced by perfect 180° semi-circles. Tall tags get top + bottom
+ * caps; wide tags get left + right caps.
+ */
+function pillPath(w: number, h: number): string {
+  if (h >= w) {
+    const r = w / 2;
+    return [
+      `M 0 ${r}`,
+      `A ${r} ${r} 0 0 1 ${w} ${r}`, // top semi-circle
+      `L ${w} ${h - r}`,
+      `A ${r} ${r} 0 0 1 0 ${h - r}`, // bottom semi-circle
+      "Z",
+    ].join(" ");
+  }
+  const r = h / 2;
+  return [
+    `M ${r} 0`,
+    `L ${w - r} 0`,
+    `A ${r} ${r} 0 0 1 ${w - r} ${h}`, // right semi-circle
+    `L ${r} ${h}`,
+    `A ${r} ${r} 0 0 1 ${r} 0`, // left semi-circle
+    "Z",
+  ].join(" ");
+}
+
+/**
+ * SVG path data for a TICKET tag — a small concave quadratic-Bezier
+ * notch is bitten out of EACH of the 4 vertices. `notch` is the
+ * straight-edge distance from each corner before the notch begins.
+ */
+function ticketPath(w: number, h: number, notch: number): string {
+  const r = Math.max(0, Math.min(notch, w * 0.4, h * 0.4));
+  return [
+    `M ${r} 0`,
+    `L ${w - r} 0`,
+    `Q ${w - r} ${r} ${w} ${r}`, // TR concave notch
+    `L ${w} ${h - r}`,
+    `Q ${w - r} ${h - r} ${w - r} ${h}`, // BR concave notch
+    `L ${r} ${h}`,
+    `Q ${r} ${h - r} 0 ${h - r}`, // BL concave notch
+    `L 0 ${r}`,
+    `Q ${r} ${r} ${r} 0`, // TL concave notch
     "Z",
   ].join(" ");
 }
@@ -426,6 +643,36 @@ function makeGuideShape(
         top,
         ...style,
       });
+    case "boutique":
+      return new fabric.Path(boutiquePath(w, h, opts.slantPx), {
+        left,
+        top,
+        ...style,
+      });
+    case "arch":
+      return new fabric.Path(archPath(w, h), {
+        left,
+        top,
+        ...style,
+      });
+    case "barrel":
+      return new fabric.Path(barrelPath(w, h, opts.slantPx), {
+        left,
+        top,
+        ...style,
+      });
+    case "pill":
+      return new fabric.Path(pillPath(w, h), {
+        left,
+        top,
+        ...style,
+      });
+    case "ticket":
+      return new fabric.Path(ticketPath(w, h, opts.cornerRadiusPx), {
+        left,
+        top,
+        ...style,
+      });
     case "rectangle":
     default:
       return new fabric.Rect({ left, top, width: w, height: h, ...style });
@@ -462,13 +709,20 @@ function drawGuides(
   const wasPaused = history.isPaused();
   if (!wasPaused) history.pause();
 
-  // Wipe existing guides (HMR, undo restores, dim changes).
+  // Wipe existing guides (HMR, undo restores, dim changes). MUST include
+  // the destination-out CUTOUT (`holePunch-cutout`) — otherwise every
+  // redraw (dimension change, orientation flip, undo, side switch, HMR)
+  // leaves the OLD cutout behind and stacks a new one. A leftover cutout
+  // from a previous position keeps erasing pixels at a stale spot,
+  // surfacing as a stray "punch hole / dot" near the top of the tag.
+  const holeCutoutId = `${GUIDE_IDS.holePunch}-cutout`;
   const stale = canvas.getObjects().filter((o) => {
     const id = (o as any).id;
     return (
       id === GUIDE_IDS.bleed ||
       id === GUIDE_IDS.safety ||
-      id === GUIDE_IDS.holePunch
+      id === GUIDE_IDS.holePunch ||
+      id === holeCutoutId
     );
   });
   if (stale.length > 0) canvas.remove(...stale);
@@ -593,25 +847,46 @@ function drawGuides(
   canvas.sendToBack(bleed);
 
   // 3) Hole punch — product-driven protective overlay (e.g. hang tags).
-  //    Centred horizontally, offset down from the bleed's TOP edge,
-  //    dashed red ring with transparent fill. Strictly locked + excluded
-  //    from export so it never lands in the saved JSON or the print PNG.
-  //    Kept at the front so it's always a visible "don't place here" cue.
+  //    Two-layer rendering keeps the hole physically real on-canvas:
+  //
+  //      • CUTOUT (destination-out): solid disc that ERASES every pixel
+  //        below it — canvas background, template fill, even user text
+  //        the user dragged over the hole. The workspace surface shows
+  //        through, matching what the final die-cut tag will look like.
+  //      • RING (source-over): transparent fill, red dashed stroke —
+  //        the visible "don't place here" guide rendered ON TOP of the
+  //        cutout so the user can still see the boundary.
+  //
+  //    Both excluded from export — the saved PNG already alpha-punches
+  //    its own hole via the export-side helper.
   const { visualGuides } = useCanvasStore.getState().productConfig;
   if (visualGuides.hasHolePunch && visualGuides.holePunchRadiusMm > 0) {
     const holeR = visualGuides.holePunchRadiusMm * MM_TO_PX;
     const holeOffsetPx = visualGuides.holePunchOffsetFromTopMm * MM_TO_PX;
-    // Orientation-aware placement: vertical tags hang from the TOP edge,
-    // horizontal tags hang from the RIGHT edge. The hole sits the same
-    // offset inward from the hanging edge, and is centred across the
-    // perpendicular axis.
     const holeCenterX =
       tagOrientation === "horizontal"
         ? bleedLeft + bleedW - holeOffsetPx
         : cx;
     const holeCenterY =
       tagOrientation === "horizontal" ? cy : bleedTop + holeOffsetPx;
-    const hole = new fabric.Circle({
+    const cutout = new fabric.Circle({
+      radius: holeR,
+      left: holeCenterX,
+      top: holeCenterY,
+      originX: "center",
+      originY: "center",
+      fill: "#000000",
+      stroke: undefined,
+      strokeWidth: 0,
+      globalCompositeOperation: "destination-out",
+      ...baseProps,
+    } as any);
+    (cutout as any).id = `${GUIDE_IDS.holePunch}-cutout`;
+    Object.assign(cutout, baseAny);
+    canvas.add(cutout);
+    canvas.bringToFront(cutout);
+
+    const ring = new fabric.Circle({
       radius: holeR,
       left: holeCenterX,
       top: holeCenterY,
@@ -624,10 +899,10 @@ function drawGuides(
       strokeUniform: true,
       ...baseProps,
     });
-    (hole as any).id = GUIDE_IDS.holePunch;
-    Object.assign(hole, baseAny);
-    canvas.add(hole);
-    canvas.bringToFront(hole);
+    (ring as any).id = GUIDE_IDS.holePunch;
+    Object.assign(ring, baseAny);
+    canvas.add(ring);
+    canvas.bringToFront(ring);
   }
 
   canvas.requestRenderAll();
@@ -785,6 +1060,33 @@ function buildSafeAreaClip(g: GuideRects): fabric.Object {
           top: g.safetyTop,
           ...opts,
         }
+      );
+    case "boutique":
+      return new fabric.Path(
+        boutiquePath(g.safetyW, g.safetyH, g.safetySlantPx),
+        { left: g.safetyLeft, top: g.safetyTop, ...opts }
+      );
+    case "arch":
+      return new fabric.Path(archPath(g.safetyW, g.safetyH), {
+        left: g.safetyLeft,
+        top: g.safetyTop,
+        ...opts,
+      });
+    case "barrel":
+      return new fabric.Path(
+        barrelPath(g.safetyW, g.safetyH, g.safetySlantPx),
+        { left: g.safetyLeft, top: g.safetyTop, ...opts }
+      );
+    case "pill":
+      return new fabric.Path(pillPath(g.safetyW, g.safetyH), {
+        left: g.safetyLeft,
+        top: g.safetyTop,
+        ...opts,
+      });
+    case "ticket":
+      return new fabric.Path(
+        ticketPath(g.safetyW, g.safetyH, g.safetyCornerRadiusPx),
+        { left: g.safetyLeft, top: g.safetyTop, ...opts }
       );
     case "rectangle":
     default:
@@ -1013,6 +1315,69 @@ export function Workspace() {
   const canvasShape = useCanvasStore((s) => s.canvasShape);
   const shapeModifiers = useCanvasStore((s) => s.shapeModifiers);
   const tagOrientation = useCanvasStore((s) => s.tagOrientation);
+  const activeSide = useCanvasStore((s) => s.activeSide);
+  const supportsBackSide = useCanvasStore(
+    (s) => s.productConfig.supportsBackSide
+  );
+  const loadActiveSideJson = useCanvasStore((s) => s.loadActiveSideJson);
+  const flipWrapperRef = useRef<HTMLDivElement | null>(null);
+  const prevActiveSideRef = useRef(activeSide);
+
+  // Half-flip: animate the wrapper 0→90deg (canvas goes edge-on), swap
+  // content, JUMP to -90deg with no transition, then animate -90→0deg.
+  // Net result: the fabric canvas always settles at rotation 0, so it
+  // stays editable and mouse coordinates remain accurate.
+  useEffect(() => {
+    if (!supportsBackSide) return;
+    if (activeSide === prevActiveSideRef.current) return;
+    prevActiveSideRef.current = activeSide;
+    const el = flipWrapperRef.current;
+    if (!el) {
+      // Canvas wrapper hasn't mounted yet — fall back to a plain load.
+      loadActiveSideJson();
+      return;
+    }
+    const horizontal = lengthMm > widthMm;
+    const axis: "X" | "Y" = horizontal ? "X" : "Y";
+
+    // Phase 1 — animate to edge-on (invisible).
+    el.style.transition = "transform 250ms ease-in-out";
+    el.style.transform = `rotate${axis}(90deg)`;
+
+    const t1 = window.setTimeout(() => {
+      // At the edge-on midpoint:
+      //   1. Swap content into the now-invisible canvas.
+      //   2. Jump to the OPPOSITE invisible edge with transition disabled.
+      //   3. Force a reflow so the browser flushes the no-transition jump.
+      //   4. Re-enable the transition and animate to 0deg.
+      loadActiveSideJson();
+      el.style.transition = "none";
+      el.style.transform = `rotate${axis}(-90deg)`;
+      // Reflow — reading offsetHeight forces layout to commit the jump
+      // before we restore the transition (otherwise the browser batches
+      // both writes and tweens the -90 → 0 transition starting from 90).
+      void el.offsetHeight;
+      el.style.transition = "transform 250ms ease-in-out";
+      el.style.transform = `rotate${axis}(0deg)`;
+    }, 260);
+
+    // Final safety reset. After both 250ms animations complete (520ms
+    // total) we explicitly force the wrapper to `rotateY(0deg)` — even
+    // if a stray transition is mid-flight or React re-renders during
+    // the swap, the canvas can NEVER come to rest at 180°. This
+    // guarantees fabric mouse coordinates + text are never mirrored.
+    const t2 = window.setTimeout(() => {
+      el.style.transition = "none";
+      el.style.transform = "rotateY(0deg)";
+      void el.offsetHeight;
+      el.style.transition = "transform 250ms ease-in-out";
+    }, 540);
+
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [activeSide, supportsBackSide, lengthMm, widthMm, loadActiveSideJson]);
 
   // Smart alignment guides (snap-to-edge / snap-to-centre while dragging).
   // Reads `canvas` from the store so it activates as soon as the canvas
@@ -1027,6 +1392,28 @@ export function Workspace() {
     top: number;
     visible: boolean;
   }>({ left: 0, top: 0, visible: false });
+
+  // True while the user is actively dragging or scaling an object — used
+  // to HIDE the centred low-quality warning badge during interaction so
+  // it doesn't obstruct the image being positioned.
+  const [isObjectMoving, setIsObjectMoving] = useState(false);
+
+  // Centre point (CSS px relative to the stage) of the active object,
+  // used to render the pulsing low-quality warning badge directly over a
+  // flagged image. `flagged` mirrors isLowRes || isBlurry on the active
+  // image; `visible` also requires the object to be an image.
+  const [warnBadge, setWarnBadge] = useState<{
+    left: number;
+    top: number;
+    visible: boolean;
+  }>({ left: 0, top: 0, visible: false });
+
+  // True briefly while the user is zooming (mouse wheel OR the +/-/reset
+  // buttons) — used to HIDE the centred warning badge during the zoom so
+  // it doesn't visually lag the rescaling image. Debounced: clears 200ms
+  // after the last zoom tick, then the badge position is recomputed.
+  const [isZooming, setIsZooming] = useState(false);
+  const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /* ----- Initialise fabric canvas ONCE ----- */
   useEffect(() => {
@@ -1049,20 +1436,50 @@ export function Workspace() {
         const active = canvas.getActiveObject() ?? null;
         updateActiveObject(active);
         updateActionMenuPos(canvas);
+        updateWarnBadge(canvas);
       }, 0);
     };
     const clear = () => {
       window.setTimeout(() => {
         updateActiveObject(null);
         setActionMenuPos((p) => ({ ...p, visible: false }));
+        setWarnBadge((p) => ({ ...p, visible: false }));
       }, 0);
     };
 
-    canvas.on("selection:created", sync);
-    canvas.on("selection:updated", sync);
+    // selection:created fires when an image is selected — re-flag it
+    // so the contextual toolbar's red banner can decide whether to show
+    // immediately, even if the image was scaled while unselected.
+    const syncWithLowRes = (e?: any) => {
+      const tgt = e?.target ?? e?.selected?.[0];
+      if (tgt && tgt.type === "image") updateLowResFlag(tgt as fabric.Image);
+      sync();
+    };
+    canvas.on("selection:created", syncWithLowRes);
+    canvas.on("selection:updated", syncWithLowRes);
     canvas.on("selection:cleared", clear);
-    canvas.on("object:modified", sync);
-    canvas.on("object:scaling", () => updateActionMenuPos(canvas));
+    canvas.on("object:modified", (e) => {
+      // Drag/scale gesture finished → reveal the centred warning badge.
+      setIsObjectMoving(false);
+      // Re-flag image quality (applies/clears the red dashed border +
+      // isLowRes/isBlurry flags). No toast — the on-canvas border +
+      // centred badge + toolbar banner are the only indicators now.
+      if (e?.target?.type === "image") {
+        updateLowResFlag(e.target as fabric.Image);
+      }
+      sync();
+    });
+    canvas.on("object:scaling", (e) => {
+      // Scaling in progress → hide the badge so it doesn't obstruct.
+      setIsObjectMoving(true);
+      updateActionMenuPos(canvas);
+      // Live-DPI tick: as the user drags a scale handle we re-flag the
+      // image every event so the red border updates the INSTANT they
+      // cross the safe-resolution threshold.
+      if (e?.target?.type === "image") {
+        updateLowResFlag(e.target as fabric.Image);
+      }
+    });
     canvas.on("object:rotating", () => updateActionMenuPos(canvas));
 
     // Drag handler — no hard clamp anymore. Each user object carries an
@@ -1070,8 +1487,42 @@ export function Workspace() {
     // portion of the object that escapes the safe area is visually hidden
     // (per spec: "soft clip", not "hard block"). We just keep the floating
     // ObjectActionMenu in sync with the new position.
-    canvas.on("object:moving", () => {
+    canvas.on("object:moving", (opt) => {
+      // Drag in progress → hide the badge until the user drops.
+      setIsObjectMoving(true);
       updateActionMenuPos(canvas);
+      runCollisionCheck(canvas, opt.target);
+    });
+    canvas.on("object:scaling", (opt) => {
+      runCollisionCheck(canvas, opt.target);
+    });
+    // mouse:up is the definitive "gesture ended" signal — covers cases
+    // where object:modified doesn't fire (e.g. a click without a move).
+    canvas.on("mouse:up", () => {
+      setIsObjectMoving(false);
+      updateWarnBadge(canvas);
+    });
+
+    // Mouse-wheel zoom — exactly 10% per tick. This app zooms via a
+    // center-anchored CSS transform on the stage wrapper (fabric's own
+    // viewportTransform stays identity), so we DON'T use
+    // canvas.zoomToPoint — we just bump the store `zoom`, which the
+    // stage scale reads. Clamped to 10%–400%.
+    canvas.on("mouse:wheel", (opt) => {
+      const e = opt.e as WheelEvent;
+      e.preventDefault();
+      e.stopPropagation();
+      const store = useCanvasStore.getState();
+      const curPct = Math.round(store.zoom * 100);
+      const delta = e.deltaY;
+      const steppedPct = delta < 0 ? curPct + 10 : curPct - 10;
+      const clampedPct = Math.max(10, Math.min(400, steppedPct));
+      if (clampedPct !== curPct) {
+        store.setZoom(clampedPct / 100);
+      }
+      // Hide the badge immediately for this tick; the [zoom] effect also
+      // fires, but calling here makes the hide instantaneous.
+      triggerZoomActivity();
     });
 
     // Auto-clip every newly added user object to the current safe area so
@@ -1087,6 +1538,27 @@ export function Workspace() {
         .getObjects()
         .find((o) => (o as any).id === GUIDE_IDS.holePunch);
       if (hole) canvas.bringToFront(hole);
+      // Quality detection for EVERY freshly-added image — uploads AND
+      // library-URL adds both flow through object:added, so this single
+      // hook covers both. Runs DPI + optical-blur and applies the red
+      // dashed border via updateLowResFlag. We defer one frame so the
+      // fabric element is fully decoded before we sample it.
+      if (target.type === "image") {
+        const runFlag = () => {
+          // Flags + red dashed border only — no global toast.
+          updateLowResFlag(target as fabric.Image);
+          canvas.requestRenderAll();
+        };
+        const el = (target as fabric.Image).getElement?.() as
+          | HTMLImageElement
+          | undefined;
+        if (el && !el.complete) {
+          el.addEventListener("load", runFlag, { once: true });
+        } else {
+          // Already decoded — still defer a frame so getElement() is set.
+          requestAnimationFrame(runFlag);
+        }
+      }
     });
 
     setCanvas(canvas);
@@ -1599,18 +2071,85 @@ export function Workspace() {
     });
   }, []);
 
+  /* ----- Position the centred low-quality warning badge ----- */
+  const updateWarnBadge = useCallback((canvasArg?: fabric.Canvas) => {
+    // Allow calling with no arg (e.g. from triggerZoomActivity) — fall
+    // back to the live canvas from the store.
+    const canvas = canvasArg ?? useCanvasStore.getState().canvas;
+    if (!canvas) {
+      setWarnBadge((p) => (p.visible ? { ...p, visible: false } : p));
+      return;
+    }
+    const active = canvas.getActiveObject() as any;
+    const stage = stageRef.current;
+    if (
+      !active ||
+      !stage ||
+      active.type !== "image" ||
+      !(active.isLowRes || active.isBlurry)
+    ) {
+      setWarnBadge((p) => (p.visible ? { ...p, visible: false } : p));
+      return;
+    }
+    // Centre of the object's bounding rect, converted to CSS px (the
+    // stage element shares the canvas top-left, same as the action menu).
+    const br = active.getBoundingRect(true, true);
+    const scale = fitScaleRef.current * zoomRef.current;
+    setWarnBadge({
+      left: (br.left + br.width / 2) * scale,
+      top: (br.top + br.height / 2) * scale,
+      visible: true,
+    });
+  }, []);
+
   // Use refs for fitScale + zoom so updateActionMenuPos always sees latest.
   const fitScaleRef = useRef(1);
   const zoomRef = useRef(1);
   fitScaleRef.current = fitScale;
   zoomRef.current = zoom;
 
-  // Recompute action menu position when scale changes.
+  // Recompute action menu + warning badge positions when scale changes.
   useEffect(() => {
     const canvas = useCanvasStore.getState().canvas;
-    if (canvas && canvas.getActiveObject()) updateActionMenuPos(canvas);
+    if (canvas && canvas.getActiveObject()) {
+      updateActionMenuPos(canvas);
+      updateWarnBadge(canvas);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fitScale, zoom]);
+
+  // Debounced "is the user actively zooming?" signal. Hides the centred
+  // warning badge during the zoom and recomputes its position 200ms
+  // after the last zoom tick. Marked stable via useCallback so the
+  // mouse:wheel handler (registered once on mount) can call it.
+  const triggerZoomActivity = useCallback(() => {
+    setIsZooming(true);
+    if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
+    zoomTimerRef.current = setTimeout(() => {
+      setIsZooming(false);
+      updateWarnBadge();
+    }, 200);
+  }, [updateWarnBadge]);
+
+  // Any zoom change — mouse wheel, the +/- buttons, or reset — funnels
+  // through the store `zoom`, so a single effect covers EVERY source.
+  // Skip the very first run (mount) so we don't flash the badge hidden
+  // before the user has done anything.
+  const zoomMountRef = useRef(true);
+  useEffect(() => {
+    if (zoomMountRef.current) {
+      zoomMountRef.current = false;
+      return;
+    }
+    triggerZoomActivity();
+  }, [zoom, triggerZoomActivity]);
+
+  // Tidy the debounce timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
+    };
+  }, []);
 
   // (No scroll-centering effect needed — we're back to a static
   // overflow-hidden workspace with center-anchored CSS scaling, so
@@ -1670,9 +2209,15 @@ export function Workspace() {
           height: stagePxSize,
         }}
       >
-        {/* Canvas itself: virtual resolution, scaled from CENTER. */}
+        {/* Canvas — virtual resolution, scaled from CENTER. Outer layer
+            handles zoom/translate so the inner half-flip orchestration
+            animates cleanly on top of a static scale baseline. The
+            inner wrapper always RESTS at rotate(0deg) — see the
+            useHalfFlip hook for the 0→90→-90→0 sequence that gives a
+            real flip illusion without ever leaving the fabric canvas
+            mirrored (which would invert mouse coords + text). */}
         <div
-          className="absolute vp-canvas-shadow"
+          className="absolute"
           style={{
             width: VIRTUAL_SIZE,
             height: VIRTUAL_SIZE,
@@ -1680,28 +2225,36 @@ export function Workspace() {
             left: "50%",
             transform: `translate(-50%, -50%) scale(${totalScale})`,
             transformOrigin: "center center",
+            perspective: "2400px",
           }}
         >
-          <canvas ref={canvasElRef} />
-          {/* PREVIEW MODE — material texture clipped EXACTLY to the bleed
-              rectangle. Positioned in virtual canvas coords (since this
-              parent is the VIRTUAL_SIZE stage), so it scales together
-              with the canvas via the parent transform. Shape-aware
-              clip-path keeps the texture inside cut-corners / ovals /
-              round-corners / stars. */}
-          {previewMode && productConfig.textureOverlayCss && (
-            <BleedTextureOverlay
-              lengthMm={lengthMm}
-              widthMm={widthMm}
-              shape={canvasShape}
-              modifiers={shapeModifiers}
-              tagOrientation={tagOrientation}
-              backgroundCss={productConfig.textureOverlayCss}
-              backgroundSize={getTextureSize(productConfig.handle)}
-              blendMode={productConfig.textureOverlayBlendMode}
-              opacity={productConfig.textureOverlayOpacity}
-            />
-          )}
+          <div
+            ref={flipWrapperRef}
+            className="vp-canvas-shadow"
+            style={{
+              width: "100%",
+              height: "100%",
+              position: "relative",
+              transformStyle: "preserve-3d",
+              transition: "transform 250ms ease-in-out",
+              transform: "rotateY(0deg)",
+            }}
+          >
+            <canvas ref={canvasElRef} />
+            {previewMode && productConfig.textureOverlayCss && (
+              <BleedTextureOverlay
+                lengthMm={lengthMm}
+                widthMm={widthMm}
+                shape={canvasShape}
+                modifiers={shapeModifiers}
+                tagOrientation={tagOrientation}
+                backgroundCss={productConfig.textureOverlayCss}
+                backgroundSize={getTextureSize(productConfig.handle)}
+                blendMode={productConfig.textureOverlayBlendMode}
+                opacity={productConfig.textureOverlayOpacity}
+              />
+            )}
+          </div>
         </div>
 
         {/* External labels for Bleed + Safe dimensions. Hidden in
@@ -1720,6 +2273,40 @@ export function Workspace() {
         {/* Floating per-object actions. */}
         {!previewMode && actionMenuPos.visible && (
           <ObjectActionMenu left={actionMenuPos.left} top={actionMenuPos.top} />
+        )}
+
+        {/* Centred low-quality warning badge — rendered directly over the
+            centre of a flagged image. Hidden while the user is dragging
+            or scaling so it never obstructs positioning, and reappears
+            on drop. */}
+        {!previewMode && warnBadge.visible && !isObjectMoving && !isZooming && (
+          <div
+            aria-label="Low-quality image warning"
+            title="This image may print blurry"
+            className="absolute z-20 pointer-events-none flex items-center justify-center w-6 h-6 rounded-full bg-red-600 text-white shadow-md ring-2 ring-white animate-pulse"
+            style={{
+              left: warnBadge.left,
+              top: warnBadge.top,
+              transform: "translate(-50%, -50%)",
+            }}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          </div>
         )}
 
         {/* Canvas-rotate button (hang-tags only). Sits inside the stage
@@ -1745,6 +2332,9 @@ export function Workspace() {
 
       {/* Floating Front / Back side switcher (multi-sided products). */}
       <SideToggle />
+
+      {/* Top-right warning toast — safe area / hole punch / low-res. */}
+      <WarningToast />
 
       {/* PREVIEW MODE — floating "Exit preview" pill so the user can
           always get back to editing. */}
@@ -1871,6 +2461,21 @@ function BleedTextureOverlay({
       break;
     case "mixed-cut-round":
       clipPath = `path('${mixedCutRoundPath(bleedW, bleedH, slantPx)}')`;
+      break;
+    case "boutique":
+      clipPath = `path('${boutiquePath(bleedW, bleedH, slantPx)}')`;
+      break;
+    case "arch":
+      clipPath = `path('${archPath(bleedW, bleedH)}')`;
+      break;
+    case "barrel":
+      clipPath = `path('${barrelPath(bleedW, bleedH, slantPx)}')`;
+      break;
+    case "pill":
+      clipPath = `path('${pillPath(bleedW, bleedH)}')`;
+      break;
+    case "ticket":
+      clipPath = `path('${ticketPath(bleedW, bleedH, radiusPx)}')`;
       break;
     case "rectangle":
     default:
@@ -2035,7 +2640,17 @@ function CanvasLabels({
   } else if (shape === "mixed-cut-round") {
     const v = Math.min(modifiers.slantLengthMm, maxModifierMm);
     modifierLabel = `Corner: ${v} mm`;
+  } else if (shape === "boutique") {
+    const v = Math.min(modifiers.slantLengthMm, maxModifierMm);
+    modifierLabel = `Curve: ${v} mm`;
+  } else if (shape === "barrel") {
+    const v = Math.min(modifiers.slantLengthMm, maxModifierMm);
+    modifierLabel = `Bulge: ${v} mm`;
+  } else if (shape === "ticket") {
+    const v = Math.min(modifiers.cornerRadiusMm, maxModifierMm);
+    modifierLabel = `Notch: ${v} mm`;
   }
+  // arch + pill take no modifier — geometry follows the bleed dims.
 
   return (
     <>
@@ -2160,3 +2775,160 @@ export const designOps = {
   clearAll: () => _designOps?.clearAll(),
   redrawGuides: () => _designOps?.redrawGuides(),
 };
+
+/**
+ * Live collision check fired on every drag tick + scale tick. If the
+ * active object intersects the hole-punch or escapes the safety
+ * rectangle, raise the top-right warning toast; if the user has just
+ * moved BACK into the safe area, clear it. Guards against the toast
+ * thrashing by no-oping when the message is unchanged.
+ */
+function runCollisionCheck(
+  canvas: fabric.Canvas,
+  target: fabric.Object | undefined
+): void {
+  if (!target || (target as any).excludeFromExport) return;
+  const objs = canvas.getObjects();
+  const safety = objs.find((o) => (o as any).id === "safety");
+  const hole = objs.find((o) => (o as any).id === "holePunch");
+  const targetBR = target.getBoundingRect(true, true);
+  let warning: string | null = null;
+  if (hole) {
+    const hr = hole.getBoundingRect(true, true);
+    const overlap =
+      targetBR.left < hr.left + hr.width &&
+      targetBR.left + targetBR.width > hr.left &&
+      targetBR.top < hr.top + hr.height &&
+      targetBR.top + targetBR.height > hr.top;
+    if (overlap) {
+      warning = "Warning: Design is over the punch hole!";
+    }
+  }
+  if (!warning && safety) {
+    const sr = safety.getBoundingRect(true, true);
+    const outside =
+      targetBR.left < sr.left ||
+      targetBR.top < sr.top ||
+      targetBR.left + targetBR.width > sr.left + sr.width ||
+      targetBR.top + targetBR.height > sr.top + sr.height;
+    if (outside) {
+      warning = "Warning: Design is outside the safe area!";
+    }
+  }
+  // Refresh image-quality flags + red dashed border as the user scales,
+  // but DO NOT raise a toast for it — image quality is communicated only
+  // via the on-canvas red border + the centred badge. (Raising it here
+  // ran inside the object:moving / object:scaling loop and spammed the
+  // toast on every tick.)
+  if (target.type === "image") {
+    updateLowResFlag(target as fabric.Image);
+  }
+  // Only collision warnings (punch-hole / safe-area) use the toast.
+  const store = useCanvasStore.getState();
+  const current = store.canvasWarning;
+  if (warning) {
+    if (current !== warning) store.setCanvasWarning(warning);
+  } else if (current) {
+    store.setCanvasWarning(null);
+  }
+}
+
+/**
+ * Compute effective print DPI for a fabric image and stamp the result
+ * on the object so the contextual toolbar can show the red "Replace
+ * Image" banner.
+ *
+ * Exact math (per spec):
+ *   physicalWidthInches = (img.getScaledWidth() / MM_TO_PX) / 25.4
+ *   effectiveDpi        = img.width / physicalWidthInches
+ *
+ * Where `MM_TO_PX = 10` (this project's virtual-canvas constant: 10
+ * canvas units = 1 mm). The threshold is 150 DPI — below that we flag
+ * the image as low-res and trigger the toast + sidebar banner.
+ *
+ * Returns `true` when the image is flagged low-res after this call.
+ */
+function updateLowResFlag(img: fabric.Image): boolean {
+  const LOW_DPI_THRESHOLD = 150;
+  // System-generated graphics (QR codes, barcodes) are crisp vector-
+  // sourced rasters — they should never trip the "low quality / blurry"
+  // warning. Skip them entirely and make sure no stale red border lingers.
+  if ((img as any).qrUrl || (img as any).barcodeText) {
+    (img as any).isLowRes = false;
+    (img as any).isBlurry = false;
+    if ((img as any).stroke === "#ef4444") {
+      img.set({ stroke: undefined, strokeWidth: 0, strokeDashArray: undefined });
+    }
+    return false;
+  }
+  // Native pixel width — fabric copies this from the underlying <img>
+  // at load time. Fall back to the DOM element's naturalWidth if it's
+  // somehow missing (e.g. after a clone).
+  const el = img.getElement?.() as HTMLImageElement | undefined;
+  const naturalWidth =
+    (img.width && img.width > 0 ? img.width : el?.naturalWidth) || 1;
+  const scaledWidth =
+    typeof img.getScaledWidth === "function"
+      ? img.getScaledWidth()
+      : (img.width || 1) * (img.scaleX || 1);
+  const physicalWidthInches = scaledWidth / MM_TO_PX / 25.4;
+  const effectiveDpi =
+    physicalWidthInches > 0 ? naturalWidth / physicalWidthInches : Infinity;
+  const lowRes =
+    Number.isFinite(effectiveDpi) && effectiveDpi < LOW_DPI_THRESHOLD;
+  (img as any).isLowRes = lowRes;
+  (img as any).effectiveDpi = Math.round(effectiveDpi);
+
+  // Optical-blur check over the ALREADY-LOADED element. This is what
+  // catches library-URL images (no File object) AND genuinely soft
+  // photos that have plenty of pixels but are out of focus. We cache
+  // the verdict so we don't re-run the (cheap but non-trivial)
+  // variance pass on every drag tick — only when the element changes.
+  let blurry = (img as any).__blurChecked
+    ? !!(img as any).isBlurry
+    : false;
+  if (!(img as any).__blurChecked && el) {
+    const result = analyzeImageElementSharpness(el as HTMLImageElement);
+    if (result) {
+      blurry = result.isBlurry;
+      (img as any).__blurChecked = true;
+      console.log(
+        "[updateLowResFlag] blur variance=%d blurry=%s",
+        Math.round(result.variance),
+        blurry
+      );
+    }
+  }
+
+  // `isBlurry` is the union flag the UI reads: low DPI (pixel stretch)
+  // OR optical blur (out of focus). Either one means "this will print
+  // soft" → red dashed border + toolbar warning + toast.
+  const flagged = lowRes || blurry;
+  (img as any).isBlurry = flagged;
+
+  // On-canvas marker — a red dashed border drawn ON the image object so
+  // the user sees exactly WHICH image is the problem. strokeUniform
+  // keeps the dash crisp regardless of the image's scale. Cleared the
+  // moment the image is no longer flagged (e.g. after sharpening or
+  // scaling back down).
+  if (flagged) {
+    img.set({
+      stroke: "#ef4444",
+      strokeWidth: 2,
+      strokeDashArray: [5, 5],
+      strokeUniform: true,
+    });
+  } else if ((img as any).stroke === "#ef4444") {
+    img.set({ stroke: undefined, strokeWidth: 0, strokeDashArray: undefined });
+  }
+
+  console.log(
+    "[updateLowResFlag] effectiveDpi=%d lowRes=%s blurry=%s scaledWidth=%d natural=%d",
+    Math.round(effectiveDpi),
+    lowRes,
+    blurry,
+    Math.round(scaledWidth),
+    naturalWidth
+  );
+  return flagged;
+}

@@ -33,18 +33,52 @@ export function TopContextualToolbar() {
 
   if (!selected) return null;
 
+  // Union quality flag — low DPI OR optical blur. Drives the red banner
+  // below the toolbar. (The pulsing warning badge now lives centred over
+  // the image itself — see Workspace.tsx — not on the toolbar.)
+  const imageFlagged =
+    selected.type === "image" && (selected.isLowRes || selected.isBlurry);
+
   return (
-    <div
-      role="toolbar"
-      aria-label="Element toolbar"
-      className="absolute top-3 left-1/2 -translate-x-1/2 bg-white rounded-md shadow-vp-pop border border-vp-border h-11 flex items-center gap-1 px-2 z-20 max-w-[calc(100vw-24px)] overflow-x-auto vp-scroll"
-    >
-      {selected.type === "text" ? (
-        <TextControls selected={selected} patch={patch} />
-      ) : selected.type === "qr" ? (
-        <QrControls selected={selected} />
-      ) : (
-        <ObjectControls selected={selected} patch={patch} />
+    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2 max-w-[calc(100vw-24px)]">
+      <div
+        role="toolbar"
+        aria-label="Element toolbar"
+        className="relative bg-white rounded-md shadow-vp-pop border border-vp-border h-11 flex items-center gap-1 px-2 overflow-visible w-max max-w-full"
+      >
+        {selected.type === "text" ? (
+          <TextControls selected={selected} patch={patch} />
+        ) : selected.type === "qr" ? (
+          <QrControls selected={selected} />
+        ) : selected.type === "barcode" ? (
+          <BarcodeControls selected={selected} />
+        ) : (
+          <ObjectControls selected={selected} patch={patch} />
+        )}
+      </div>
+      {imageFlagged && (
+        <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-800 rounded-md px-3 py-2 shadow-sm w-max max-w-full">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="shrink-0"
+            aria-hidden
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <span className="text-[12.5px] font-medium leading-snug">
+            Low-quality image — may print blurry.
+          </span>
+        </div>
       )}
     </div>
   );
@@ -78,6 +112,48 @@ function QrControls({ selected }: { selected: Selected }) {
       />
       <button
         onClick={() => setBg("transparent")}
+        className={[
+          "h-7 px-2 rounded text-[11px] font-medium border shrink-0",
+          isTransparent
+            ? "border-vp-blue text-vp-blue bg-vp-blue-light"
+            : "border-vp-border text-vp-ink hover:border-vp-blue",
+        ].join(" ")}
+        title="Transparent background"
+      >
+        No bg
+      </button>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Barcode-specific controls                                           */
+/* ------------------------------------------------------------------ */
+
+function BarcodeControls({ selected }: { selected: Selected }) {
+  const updateBarcodeColors = useCanvasStore((s) => s.updateBarcodeColors);
+  const addRecent = useCanvasStore((s) => s.addRecentColor);
+  const setBar = (c: string) => {
+    addRecent(c);
+    void updateBarcodeColors({ barColor: c });
+  };
+  const setBg = (c: string) => {
+    addRecent(c);
+    void updateBarcodeColors({ bgColor: c, hasBg: true });
+  };
+  const isTransparent = selected.barHasBg === false;
+  return (
+    <>
+      <span className="text-[11px] text-vp-muted px-1 shrink-0">Bars</span>
+      <ColorButton value={selected.barColor || "#000000"} onChange={setBar} />
+      <Divider />
+      <span className="text-[11px] text-vp-muted px-1 shrink-0">Bg</span>
+      <ColorButton
+        value={isTransparent ? "#ffffff" : selected.barBgColor || "#ffffff"}
+        onChange={setBg}
+      />
+      <button
+        onClick={() => void updateBarcodeColors({ hasBg: false })}
         className={[
           "h-7 px-2 rounded text-[11px] font-medium border shrink-0",
           isTransparent

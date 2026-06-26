@@ -103,8 +103,13 @@ export function UploadCenterModal() {
     for (const file of Array.from(files)) {
       if (!file.type.startsWith("image/")) continue;
 
-      // Render onto the canvas immediately via dataURL — we don't want to
-      // block on the network round-trip.
+      // NOTE: image quality (low-res + optical blur) is detected on the
+      // canvas itself via the `object:added` handler in Workspace, which
+      // applies the red dashed border + flags that drive the centred
+      // warning badge and toolbar banner. We deliberately do NOT raise a
+      // global slide-in toast here — the on-canvas indicators are the
+      // single source of truth and the toast was redundant/annoying.
+
       const reader = new FileReader();
       const dataUrlPromise = new Promise<string>((resolve, reject) => {
         reader.onload = () => resolve(reader.result as string);

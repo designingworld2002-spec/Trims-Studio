@@ -1,9 +1,17 @@
+import { useState } from "react";
 import { useCanvasStore } from "@/store/canvasStore";
+import { ConfirmDeleteModal } from "./ConfirmDeleteModal";
 
 /**
- * Floating Front / Back thumbnail switcher pinned bottom-right of the
- * workspace, mirroring the Vistaprint editor. Renders only for products
- * with `supportsBackSide: true`. Suppressed in Preview Mode.
+ * Floating Front / Back side switcher — pill-shaped segmented control
+ * pinned to the bottom-centre of the workspace. Renders only for
+ * products with `supportsBackSide: true`. Suppressed in Preview Mode.
+ *
+ * Design:
+ *   • Two halves of a single rounded pill, the active half lifted with
+ *     a white card + soft shadow so it reads as a physical toggle.
+ *   • Trash-can button sits flush to the right of the pill once a back
+ *     design exists, with a separator pip so it never feels grafted on.
  */
 export function SideToggle() {
   const supportsBack = useCanvasStore(
@@ -14,6 +22,8 @@ export function SideToggle() {
   const previewMode = useCanvasStore((s) => s.previewMode);
   const backDesign = useCanvasStore((s) => s.backDesign);
   const setBackChooserOpen = useCanvasStore((s) => s.setBackChooserOpen);
+  const clearBackDesign = useCanvasStore((s) => s.clearBackDesign);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   if (!supportsBack || previewMode) return null;
 
@@ -23,9 +33,6 @@ export function SideToggle() {
   ];
 
   const onPick = (side: "front" | "back") => {
-    // First-time Back: pop the chooser modal instead of jumping straight
-    // to a blank canvas. Once backDesign exists, the click switches
-    // instantly (like Vistaprint after the back has been started).
     if (side === "back" && activeSide !== "back" && !backDesign) {
       setBackChooserOpen(true);
       return;
@@ -33,41 +40,87 @@ export function SideToggle() {
     setActiveSide(side);
   };
 
+  const onClearBack = () => setConfirmOpen(true);
+  const onConfirmClear = () => {
+    setConfirmOpen(false);
+    clearBackDesign();
+  };
+
+  const showTrash = backDesign || activeSide === "back";
+
   return (
     <div
-      className="absolute right-6 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-4 bg-white/95 backdrop-blur-sm border border-vp-border rounded-xl shadow-vp-pop p-2"
+      className="absolute bottom-4 right-4 z-20 flex items-center gap-2"
       aria-label="Switch side"
     >
-      {sides.map((s) => {
-        const active = activeSide === s.key;
-        return (
-          <button
-            key={s.key}
-            onClick={() => onPick(s.key)}
-            aria-pressed={active}
-            className={[
-              "flex flex-col items-center gap-1.5 px-3 py-2 rounded-lg transition-all",
-              active
-                ? "bg-vp-accent text-white"
-                : "text-vp-ink/70 hover:bg-vp-rail",
-            ].join(" ")}
-          >
-            <div
+      {/* Segmented pill */}
+      <div className="flex items-center bg-white/95 backdrop-blur-sm border border-vp-border rounded-full p-1 shadow-vp-pop">
+        {sides.map((s) => {
+          const active = activeSide === s.key;
+          return (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => onPick(s.key)}
+              aria-pressed={active}
               className={[
-                "w-16 h-10 rounded border flex items-center justify-center text-[11px] font-semibold tracking-wide",
+                "relative h-9 px-5 rounded-full text-[13px] font-semibold tracking-wide transition-all",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-vp-accent/40",
                 active
-                  ? "border-white/40 bg-white/15"
-                  : "border-vp-border bg-white",
+                  ? "bg-vp-ink text-white shadow-[0_2px_8px_-2px_rgba(0,0,0,0.25)]"
+                  : "text-vp-ink/65 hover:text-vp-ink",
               ].join(" ")}
             >
-              {s.key === "front" ? "F" : "B"}
-            </div>
-            <span className="text-[11px] font-medium leading-none">
               {s.label}
-            </span>
-          </button>
-        );
-      })}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Trash — only after a back design exists or is being designed */}
+      {showTrash && (
+        <button
+          type="button"
+          onClick={onClearBack}
+          title="Remove back design"
+          aria-label="Remove back design"
+          className={[
+            "flex items-center justify-center h-9 w-9 rounded-full",
+            "bg-white/95 backdrop-blur-sm border border-vp-border shadow-vp-pop",
+            "text-vp-ink/60 hover:text-red-600 hover:border-red-200 hover:bg-red-50",
+            "transition-colors",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300",
+          ].join(" ")}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+            <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+          </svg>
+        </button>
+      )}
+      <ConfirmDeleteModal
+        open={confirmOpen}
+        title="Remove back design?"
+        message="Your back-side artwork will be discarded. This can't be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onConfirm={onConfirmClear}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   );
 }
