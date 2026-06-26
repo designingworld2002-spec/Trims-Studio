@@ -20,7 +20,8 @@
       "Bash(curl -s http://localhost:5173/)",
       "Bash(node -e ' *)",
       "Bash(echo \"exit=$?\")",
-      "Bash(ls \"D:/My Personal Studio/vp-clone-studio/\" 2>&1 | head -30)"
+      "Bash(ls \"D:/My Personal Studio/vp-clone-studio/\" 2>&1 | head -30)",
+      "PowerShell(npx tsc -b)"
     ]
   }
 }

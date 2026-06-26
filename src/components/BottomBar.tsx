@@ -48,8 +48,8 @@ export function BottomBar() {
       </button>
       <div className="h-px w-5 bg-vp-border my-1" />
       <SmartPopover
-        side="left"
-        align="center"
+        side="top"
+        align="auto"
         className="w-60 p-2"
         trigger={
           <button
