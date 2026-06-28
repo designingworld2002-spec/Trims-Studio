@@ -31,6 +31,7 @@ export function LeftToolRail() {
   return (
     <nav
       aria-label="Tools"
+      data-tour="sidebar"
       className={[
         "shrink-0 bg-white flex",
         // Mobile: horizontal bottom rail — keep the hairline so it

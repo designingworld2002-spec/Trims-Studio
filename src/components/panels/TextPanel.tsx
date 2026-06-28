@@ -27,7 +27,7 @@ export function TextPanel() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-tour="panel-text">
       <p className="text-xs text-vp-muted leading-relaxed">
         Edit your text below, or click on the field you'd like to edit directly
         on your design.

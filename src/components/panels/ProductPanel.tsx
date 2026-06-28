@@ -33,6 +33,7 @@ export function ProductPanel() {
   const updateWidth = useCanvasStore((s) => s.updateWidth);
   const toggleOrientation = useCanvasStore((s) => s.toggleOrientation);
   const productHandle = useCanvasStore((s) => s.productConfig.handle);
+  const presetSizes = useCanvasStore((s) => s.productConfig.presetSizes);
   const mode = useCanvasStore((s) => s.mode);
 
   const isHorizontal = lengthMm >= widthMm;
@@ -49,7 +50,7 @@ export function ProductPanel() {
   const orientationDisabled = productHandle === "woven-labels";
 
   return (
-    <div className="space-y-7">
+    <div className="space-y-7" data-tour="panel-product">
       <div>
         <h3 className="text-[15px] font-semibold mb-1.5 tracking-tight text-vp-ink">
           Product options
@@ -159,6 +160,7 @@ export function ProductPanel() {
       <SizePresets
         lengthMm={lengthMm}
         widthMm={widthMm}
+        presetSizes={presetSizes}
         onPick={(l, w) => {
           // Use setCanvasSize directly to update BOTH axes atomically.
           // updateLength/updateWidth go through the aspect-lock logic
@@ -649,17 +651,24 @@ const PRESET_WIDTHS_MM = [
 function SizePresets({
   lengthMm,
   widthMm,
+  presetSizes,
   onPick,
 }: {
   lengthMm: number;
   widthMm: number;
+  presetSizes?: { label: string; widthMm: number }[];
   onPick: (lengthMm: number, widthMm: number) => void;
 }) {
   // Live aspect ratio of the current workspace = active template's
   // ratio (since each load syncs canvasLengthMm/widthMm to the
   // saved design's dimensions). Long-edge orientation preserved.
   const ratio = widthMm > 0 ? lengthMm / widthMm : 1;
-  const presets = PRESET_WIDTHS_MM.map((p) => {
+  // Per-product tiers when supplied (e.g. woven Standard=32, Large=67);
+  // otherwise the generic default set.
+  const tiers = presetSizes && presetSizes.length > 0
+    ? presetSizes
+    : PRESET_WIDTHS_MM;
+  const presets = tiers.map((p) => {
     const newWidth = p.widthMm;
     const newLength = Math.max(10, Math.round(newWidth * ratio));
     return { label: p.label, length: newLength, width: newWidth };

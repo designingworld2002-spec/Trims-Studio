@@ -24,7 +24,7 @@ export function BottomBar() {
   };
 
   return (
-    <div className="absolute top-1/2 -translate-y-1/2 right-4 bg-white rounded-full shadow-vp-pop border border-vp-border w-10 flex flex-col items-center py-1 gap-0.5 z-10">
+    <div data-tour="zoom" className="absolute top-1/2 -translate-y-1/2 right-4 bg-white rounded-full shadow-vp-pop border border-vp-border w-10 flex flex-col items-center py-1 gap-0.5 z-10">
       <button
         aria-label="Zoom in"
         onClick={stepUp}

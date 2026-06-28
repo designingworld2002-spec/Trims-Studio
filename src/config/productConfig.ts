@@ -72,6 +72,20 @@ export interface ProductConfig {
     | "overlay"
     | "soft-light"
     | "hard-light";
+  /**
+   * Optional per-product size presets, anchored on the SHORT edge (mm).
+   * The Product panel derives the long edge from the live aspect ratio.
+   * When omitted, the panel falls back to its default tier set.
+   */
+  presetSizes?: { label: string; widthMm: number }[];
+  /**
+   * Optional whitelist of background swatch colours. When present, the
+   * Background panel shows ONLY these and hides the free hex / colour
+   * picker — used to hard-lock a product to specific stock colours
+   * (e.g. taffeta = white only). When omitted, the full palette + free
+   * picker are available.
+   */
+  backgroundColors?: string[];
 }
 
 const ALL_TOOLS: NonNullable<ToolKey>[] = [
@@ -108,12 +122,20 @@ export const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
     allowedShapes: ["rectangle"],
     // Woven labels are typically single-faced.
     supportsBackSide: false,
-    // Woven thread illusion — fine alternating warp/weft lines. Two
-    // repeating gradients perpendicular to each other simulate the
-    // interlace pattern at ~1px thread spacing.
-    textureOverlayCss: "url('/texture-woven.png')",
-    textureOverlayOpacity: 0.35,
+    // Preview overlay removed per client spec — render the clean design.
+    textureOverlayCss: null,
+    textureOverlayOpacity: 0,
     textureOverlayBlendMode: "multiply",
+    // Client-mandated woven sizes: Standard short-edge = 32 mm, Large =
+    // 67 mm. Small + Medium unchanged. The long edge is derived from the
+    // live aspect ratio by the Product panel, so the SHORT edge is
+    // always exactly these values.
+    presetSizes: [
+      { label: "Small", widthMm: 20 },
+      { label: "Standard", widthMm: 32 },
+      { label: "Medium", widthMm: 50 },
+      { label: "Large", widthMm: 67 },
+    ],
   },
 
   "hang-tags": {
@@ -174,12 +196,7 @@ export const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
  * in handle, label, and the material texture overlay.
  */
 function printedLabelConfigs(): Record<string, ProductConfig> {
-  const base = (
-    handle: string,
-    label: string,
-    texture: string,
-    opacity: number
-  ): ProductConfig => ({
+  const base = (handle: string, label: string): ProductConfig => ({
     handle,
     label,
     allowedTools: ALL_TOOLS,
@@ -187,34 +204,30 @@ function printedLabelConfigs(): Record<string, ProductConfig> {
     defaultDimensions: { lengthMm: 60, widthMm: 40 },
     visualGuides: NO_HOLE,
     canvasClipShape: "rectangle",
-    // Guillotine-cut, so only the rectangular family is offered.
-    allowedShapes: ["rectangle", "round-corners", "cut-corners"],
+    // Shapes removed per client spec — printed labels are always plain
+    // rectangles. A single allowed shape hides the shape picker.
+    allowedShapes: ["rectangle"],
     // Printed both sides, exactly like hang tags.
     supportsBackSide: true,
-    textureOverlayCss: texture,
-    textureOverlayOpacity: opacity,
+    // Preview overlay removed per client spec.
+    textureOverlayCss: null,
+    textureOverlayOpacity: 0,
     textureOverlayBlendMode: "multiply",
   });
   return {
     "cotton-printed-labels": base(
       "cotton-printed-labels",
-      "Cotton Printed Labels",
-      "url('/texture-woven.png')",
-      0.32
+      "Cotton Printed Labels"
     ),
     "satin-printed-labels": base(
       "satin-printed-labels",
-      "Satin Printed Labels",
-      // Satin reads smoother/glossier — lighter overlay, soft sheen.
-      "url('/texture-woven.png')",
-      0.18
+      "Satin Printed Labels"
     ),
-    "taffeta-printed-labels": base(
-      "taffeta-printed-labels",
-      "Taffeta Printed Labels",
-      "url('/texture-woven.png')",
-      0.4
-    ),
+    "taffeta-printed-labels": {
+      ...base("taffeta-printed-labels", "Taffeta Printed Labels"),
+      // Taffeta is stocked white-only — lock the background palette.
+      backgroundColors: ["#ffffff"],
+    },
   };
 }
 

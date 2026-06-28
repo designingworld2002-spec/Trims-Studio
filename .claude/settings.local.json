@@ -21,7 +21,9 @@
       "Bash(node -e ' *)",
       "Bash(echo \"exit=$?\")",
       "Bash(ls \"D:/My Personal Studio/vp-clone-studio/\" 2>&1 | head -30)",
-      "PowerShell(npx tsc -b)"
+      "PowerShell(npx tsc -b)",
+      "PowerShell(npx tsc -b 2>&1)",
+      "PowerShell($env:NODE_OPTIONS=\"\"; npx tsc --noEmit -p tsconfig.app.json 2>&1 | Select-Object -First 25)"
     ]
   }
 }

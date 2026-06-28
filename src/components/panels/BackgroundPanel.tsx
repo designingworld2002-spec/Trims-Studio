@@ -32,14 +32,49 @@ export function BackgroundPanel() {
   const setBg = useCanvasStore((s) => s.setBackgroundColor);
   const recents = useCanvasStore((s) => s.recentColors);
   const addRecent = useCanvasStore((s) => s.addRecentColor);
+  // Per-product background lock (e.g. taffeta = white only). When set,
+  // we restrict the panel to just those swatches and hide the free
+  // hex + colour-picker so a locked product can never go off-palette.
+  const lockedColors = useCanvasStore((s) => s.productConfig.backgroundColors);
 
   const apply = (c: string) => {
     setBg(c);
     addRecent(c);
   };
 
+  // Locked palette → show ONLY the allowed swatches.
+  if (lockedColors && lockedColors.length > 0) {
+    return (
+      <div className="space-y-6" data-tour="panel-background">
+        <div>
+          <SectionLabel>Background</SectionLabel>
+          <p className="text-[11px] text-vp-muted mb-2.5">
+            This product is available in a fixed background colour.
+          </p>
+          <div className="grid grid-cols-6 gap-1.5">
+            {lockedColors.map((color) => (
+              <button
+                key={color}
+                title={color.toUpperCase()}
+                aria-label={color}
+                onClick={() => apply(color)}
+                className={[
+                  "aspect-square rounded-md ring-1 transition-all duration-150",
+                  bg.toLowerCase() === color.toLowerCase()
+                    ? "ring-2 ring-vp-blue scale-110 shadow-sm"
+                    : "ring-vp-border hover:ring-vp-blue/60 hover:scale-105",
+                ].join(" ")}
+                style={{ background: color }}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-tour="panel-background">
       <div>
         <SectionLabel>Hex</SectionLabel>
         <input

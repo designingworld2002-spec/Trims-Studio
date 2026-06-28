@@ -125,7 +125,7 @@ export function UploadsPanel() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-tour="panel-uploads">
       <input
         ref={inputRef}
         type="file"

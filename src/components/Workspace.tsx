@@ -12,6 +12,7 @@ import { ObjectActionMenu } from "./ObjectActionMenu";
 import { RevertToTemplate } from "./RevertToTemplate";
 import { SideToggle } from "./SideToggle";
 import { WarningToast } from "./WarningToast";
+import { StudioTour } from "./StudioTour";
 
 /**
  * Virtual workspace constants.
@@ -1323,6 +1324,27 @@ export function Workspace() {
   const flipWrapperRef = useRef<HTMLDivElement | null>(null);
   const prevActiveSideRef = useRef(activeSide);
 
+  // Interactive onboarding tour — auto-opens once for first-time users,
+  // and is re-openable any time via the Help button (which flips the
+  // same store flag). The localStorage flag is set + the tour opened in
+  // the SAME tick, so StrictMode's double-mount is safe: the first mount
+  // marks "seen" and activates; the second mount sees the flag and skips
+  // (the active state from the first mount persists in the store).
+  const isTourActive = useCanvasStore((s) => s.isTourActive);
+  const setTourActive = useCanvasStore((s) => s.setTourActive);
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem("hasSeenStudioIntro")) {
+        localStorage.setItem("hasSeenStudioIntro", "1");
+        // StudioTour polls + measures targets itself, so opening now is
+        // safe even before the rails finish their first paint.
+        setTourActive(true);
+      }
+    } catch {
+      /* localStorage blocked (private mode) — just skip the auto-tour. */
+    }
+  }, [setTourActive]);
+
   // Half-flip: animate the wrapper 0→90deg (canvas goes edge-on), swap
   // content, JUMP to -90deg with no transition, then animate -90→0deg.
   // Net result: the fabric canvas always settles at rotation 0, so it
@@ -1447,12 +1469,19 @@ export function Workspace() {
       }, 0);
     };
 
-    // selection:created fires when an image is selected — re-flag it
-    // so the contextual toolbar's red banner can decide whether to show
-    // immediately, even if the image was scaled while unselected.
+    // selection:created/updated — re-flag low-res images so the toolbar
+    // banner is immediate, AND auto-open the Text tab when a text object
+    // is selected so the user can edit it without double-clicking.
+    const TEXT_TYPES = ["textbox", "i-text", "text"];
     const syncWithLowRes = (e?: any) => {
       const tgt = e?.target ?? e?.selected?.[0];
       if (tgt && tgt.type === "image") updateLowResFlag(tgt as fabric.Image);
+      if (tgt && TEXT_TYPES.includes(tgt.type)) {
+        // Don't fight Preview mode (panels are hidden there).
+        if (!useCanvasStore.getState().previewMode) {
+          useCanvasStore.getState().openTool("text");
+        }
+      }
       sync();
     };
     canvas.on("selection:created", syncWithLowRes);
@@ -2203,6 +2232,7 @@ export function Workspace() {
     >
       <div
         ref={stageRef}
+        data-tour="canvas"
         className="relative shrink-0"
         style={{
           width: stagePxSize,
@@ -2335,6 +2365,9 @@ export function Workspace() {
 
       {/* Top-right warning toast — safe area / hole punch / low-res. */}
       <WarningToast />
+
+      {/* Interactive onboarding tour overlay (live element highlighting). */}
+      {isTourActive && <StudioTour />}
 
       {/* PREVIEW MODE — floating "Exit preview" pill so the user can
           always get back to editing. */}

@@ -477,7 +477,14 @@ export interface CanvasStoreState {
 
   // ---- UI state ----
   activeTool: ToolKey;
+  /** Toggle a tool tab (clicking the active one closes it). */
   setActiveTool: (t: ToolKey) => void;
+  /**
+   * Deterministically OPEN a tool tab (never toggles). Used by the
+   * guided tour (to step through panels) and the auto-open-on-text-
+   * select behaviour, where toggling would be wrong.
+   */
+  openTool: (t: NonNullable<ToolKey>) => void;
 
   zoom: number; // 1 = fit
   setZoom: (z: number) => void;
@@ -584,6 +591,11 @@ export interface CanvasStoreState {
   // ---- preview ----
   previewOpen: boolean;
   setPreviewOpen: (b: boolean) => void;
+
+  // ---- interactive onboarding tour ----
+  /** Whether the live element-highlight tour overlay is showing. */
+  isTourActive: boolean;
+  setTourActive: (b: boolean) => void;
 
   /**
    * Preview MODE — distinct from `previewOpen` (the modal). When `true`,
@@ -940,6 +952,8 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   activeTool: null,
   setActiveTool: (t) =>
     set((s) => ({ activeTool: s.activeTool === t ? null : t })),
+  openTool: (t) =>
+    set((s) => (s.activeTool === t ? s : { activeTool: t })),
 
   zoom: 1,
   setZoom: (z) => set({ zoom: Math.min(Math.max(z, 0.1), 5) }),
@@ -1301,6 +1315,9 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
 
   previewOpen: false,
   setPreviewOpen: (b) => set({ previewOpen: b }),
+
+  isTourActive: false,
+  setTourActive: (b) => set({ isTourActive: b }),
 
   // ---- 3D Flip Preview Modal ------------------------------------------
   previewFlipOpen: false,

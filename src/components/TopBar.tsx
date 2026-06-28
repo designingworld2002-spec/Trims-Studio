@@ -1,4 +1,4 @@
-import { Cloud, Eye, Redo2, Undo2 } from "lucide-react";
+import { Cloud, Eye, HelpCircle, Redo2, Undo2 } from "lucide-react";
 
 const ICON_STROKE = 1.6;
 import { useCanvasStore } from "@/store/canvasStore";
@@ -12,6 +12,7 @@ export function TopBar() {
   const lastSavedAt = useCanvasStore((s) => s.lastSavedAt);
   const setPreviewOpen = useCanvasStore((s) => s.setPreviewOpen);
   const setPreviewFlipOpen = useCanvasStore((s) => s.setPreviewFlipOpen);
+  const setTourActive = useCanvasStore((s) => s.setTourActive);
 
   return (
     <header className="h-14 bg-white border-b border-gray-100 shadow-sm flex items-center px-2 sm:px-4 shrink-0 gap-1 z-30 relative">
@@ -30,7 +31,10 @@ export function TopBar() {
 
       {/* Center: auto-save + undo/redo. Hidden on mobile to free up space;
           undo/redo move to the right cluster instead. */}
-      <div className="hidden md:flex flex-1 items-center justify-center gap-1">
+      <div
+        data-tour="history"
+        className="hidden md:flex flex-1 items-center justify-center gap-1"
+      >
         <div className="flex items-center gap-1.5 text-[11px] text-vp-muted px-3 font-medium">
           <Cloud className="w-3.5 h-3.5" strokeWidth={ICON_STROKE} />
           <span>{lastSavedAt ? "Saved" : "Not saved yet"}</span>
@@ -51,10 +55,19 @@ export function TopBar() {
         >
           <Redo2 className="w-4 h-4" strokeWidth={ICON_STROKE} />
         </button>
+        {/* Help — relaunch the interactive studio tour. */}
+        <button
+          aria-label="Help — take a tour"
+          title="Take a quick tour"
+          onClick={() => setTourActive(true)}
+          className="w-9 h-9 rounded-lg hover:bg-vp-rail flex items-center justify-center transition-colors text-vp-ink/70 hover:text-vp-ink"
+        >
+          <HelpCircle className="w-4 h-4" strokeWidth={ICON_STROKE} />
+        </button>
       </div>
 
       {/* Right cluster: mobile-only undo/redo, then preview + Next */}
-      <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+      <div data-tour="actions" className="flex items-center gap-1 sm:gap-2 shrink-0">
         <button
           aria-label="Undo"
           onClick={() => history.undo()}
