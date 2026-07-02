@@ -73,11 +73,20 @@ export interface ProductConfig {
     | "soft-light"
     | "hard-light";
   /**
-   * Optional per-product size presets, anchored on the SHORT edge (mm).
-   * The Product panel derives the long edge from the live aspect ratio.
-   * When omitted, the panel falls back to its default tier set.
+   * Optional per-product size presets. `widthMm` is the SMALLER
+   * dimension (short edge) in mm; the Product panel scales the design so
+   * the short edge lands on that value while preserving the aspect
+   * ratio. Optionally pin the LARGER dimension too via `lengthMm` (a
+   * fully-fixed size, e.g. a 50 × 80 mm hang tag). When omitted, the
+   * panel falls back to its default tier set.
    */
-  presetSizes?: { label: string; widthMm: number }[];
+  presetSizes?: { label: string; widthMm: number; lengthMm?: number }[];
+  /**
+   * When true, the product ships in fixed stock sizes only — the Product
+   * panel hides the custom Width / Height numeric inputs so the user can
+   * ONLY choose from the preset size pills.
+   */
+  fixedSizesOnly?: boolean;
   /**
    * Optional whitelist of background swatch colours. When present, the
    * Background panel shows ONLY these and hides the free hex / colour
@@ -177,6 +186,14 @@ export const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
     textureOverlayCss: "url('/texture-hangtag.png')",
     textureOverlayOpacity: 0.7,
     textureOverlayBlendMode: "multiply",
+    // Client-mandated hang-tag tiers (short edge = the value shown):
+    //   Small  = old Medium (50), Standard = old Large (70),
+    //   Large  = a fixed 50 × 80 mm tag (short edge exactly 50 mm).
+    presetSizes: [
+      { label: "Small", widthMm: 25 },
+      { label: "Standard", widthMm: 35 },
+      { label: "Large", widthMm: 50 },
+    ],
   },
 
   // -------------------------------------------------------------------
@@ -228,6 +245,30 @@ function printedLabelConfigs(): Record<string, ProductConfig> {
       // Taffeta is stocked white-only — lock the background palette.
       backgroundColors: ["#ffffff"],
     },
+    // Washcare labels — same manufacturing profile as cotton printed
+    // (rectangle-only, no overlay), but FIXED stock sizes only.
+    "washcare-labels": {
+      ...base("washcare-labels", "Washcare Labels"),
+      defaultDimensions: { lengthMm: 45, widthMm: 30 },
+      fixedSizesOnly: true,
+      presetSizes: [
+        { label: "Small", widthMm: 28 },
+        { label: "Standard", widthMm: 32 },
+        { label: "Medium", widthMm: 40 },
+        { label: "Large", widthMm: 50 },
+      ],
+    },
+    // Size labels — tiny fixed-size fabric labels.
+    "size-labels": {
+      ...base("size-labels", "Size Labels"),
+      defaultDimensions: { lengthMm: 25, widthMm: 15 },
+      fixedSizesOnly: true,
+      presetSizes: [
+        { label: "Small", widthMm: 12 },
+        { label: "Standard", widthMm: 15 },
+        { label: "Large", widthMm: 20 },
+      ],
+    },
   };
 }
 
@@ -246,6 +287,11 @@ export function getProductConfig(
   const norm = handle.toLowerCase().trim().replace(/[\s_]+/g, "-");
   if (PRODUCT_CONFIGS[norm]) return PRODUCT_CONFIGS[norm];
   if (norm.includes("hang")) return PRODUCT_CONFIGS["hang-tags"];
+
+  // Washcare + size labels — matched BEFORE the generic "label" fallback.
+  if (norm.includes("washcare") || norm.includes("wash-care") || norm.includes("care"))
+    return PRODUCT_CONFIGS["washcare-labels"];
+  if (norm.includes("size")) return PRODUCT_CONFIGS["size-labels"];
 
   // Printed labels — match the material keyword. Checked BEFORE the
   // generic "woven"/"label" fallback so "cotton printed labels" etc.

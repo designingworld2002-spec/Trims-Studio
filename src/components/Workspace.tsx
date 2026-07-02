@@ -1359,8 +1359,14 @@ export function Workspace() {
       loadActiveSideJson();
       return;
     }
-    const horizontal = lengthMm > widthMm;
-    const axis: "X" | "Y" = horizontal ? "X" : "Y";
+    // Flip axis: ONLY hang tags flip vertically (rotateX) when in
+    // landscape orientation. Every other product (cotton / satin /
+    // taffeta / washcare / size labels) always flips horizontally
+    // (rotateY, book-like) regardless of aspect ratio.
+    const isLandscape = lengthMm > widthMm;
+    const shouldFlipVertically =
+      productConfig.handle === "hang-tags" && isLandscape;
+    const axis: "X" | "Y" = shouldFlipVertically ? "X" : "Y";
 
     // Phase 1 — animate to edge-on (invisible).
     el.style.transition = "transform 250ms ease-in-out";
@@ -1399,7 +1405,14 @@ export function Workspace() {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
     };
-  }, [activeSide, supportsBackSide, lengthMm, widthMm, loadActiveSideJson]);
+  }, [
+    activeSide,
+    supportsBackSide,
+    lengthMm,
+    widthMm,
+    productConfig.handle,
+    loadActiveSideJson,
+  ]);
 
   // Smart alignment guides (snap-to-edge / snap-to-centre while dragging).
   // Reads `canvas` from the store so it activates as soon as the canvas
@@ -1689,8 +1702,9 @@ export function Workspace() {
     // designOps facade — load arbitrary fabric JSON onto the live canvas
     // (Recent Designs picker) or wipe every user object (Clear canvas).
     _registerDesignOps({
-      loadJson: (json, lengthMm, widthMm) =>
+      loadJson: (json, lengthMm, widthMm, opts) =>
         new Promise<void>((resolve) => {
+          const skipFit = opts?.skipFit === true;
           hist.pause();
 
           // 0) Pre-load cleanup. `canvas.loadFromJSON` calls
@@ -1771,7 +1785,11 @@ export function Workspace() {
               .getObjects()
               .filter((o) => !(o as any).excludeFromExport);
 
-            if (userObjects.length > 0) {
+            // Side-switch loads (`skipFit`) are already sized for the
+            // current bleed — fitting them would inflate the composition
+            // on every Front↔Back switch. Only template / recent-design
+            // loads fit-to-bleed.
+            if (!skipFit && userObjects.length > 0) {
               let minX = Infinity;
               let minY = Infinity;
               let maxX = -Infinity;
@@ -2788,7 +2806,12 @@ function CanvasLabels({
 /* ------------------------------------------------------------------ */
 
 interface DesignOpsImpl {
-  loadJson: (json: any, lengthMm: number, widthMm: number) => Promise<void>;
+  loadJson: (
+    json: any,
+    lengthMm: number,
+    widthMm: number,
+    opts?: { skipFit?: boolean }
+  ) => Promise<void>;
   /** Force a fresh drawGuides call using the CURRENT store state. Used
    *  by side-switch / load flows that need guides to redraw regardless
    *  of React effect batching. */
@@ -2803,8 +2826,21 @@ export function _registerDesignOps(impl: DesignOpsImpl | null) {
 }
 
 export const designOps = {
-  loadJson: (json: any, lengthMm: number, widthMm: number) =>
-    _designOps?.loadJson(json, lengthMm, widthMm),
+  /**
+   * Load fabric JSON onto the live canvas.
+   *
+   * `opts.skipFit` — skip the fit-to-bleed rescale. Templates / Recent
+   * Designs are authored at arbitrary sizes, so they SHOULD be scaled to
+   * fill the new bleed (default). But a Front↔Back side snapshot is
+   * already sized for the current canvas — fitting it would inflate the
+   * content on every switch, so the side-switch path passes `skipFit`.
+   */
+  loadJson: (
+    json: any,
+    lengthMm: number,
+    widthMm: number,
+    opts?: { skipFit?: boolean }
+  ) => _designOps?.loadJson(json, lengthMm, widthMm, opts),
   clearAll: () => _designOps?.clearAll(),
   redrawGuides: () => _designOps?.redrawGuides(),
 };

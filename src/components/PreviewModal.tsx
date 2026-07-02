@@ -35,6 +35,11 @@ export function PreviewModal() {
 
   const supportsBack = productConfig.supportsBackSide;
 
+  // Flip axis: only hang tags flip vertically (rotateX) when landscape;
+  // every other product always flips horizontally (rotateY).
+  const flipAxis: "X" | "Y" =
+    productConfig.handle === "hang-tags" && lengthMm > widthMm ? "X" : "Y";
+
   const [frontUrl, setFrontUrl] = useState<string | null>(null);
   const [backUrl, setBackUrl] = useState<string | null>(null);
   const [shownSide, setShownSide] = useState<"front" | "back">(activeSide);
@@ -245,15 +250,13 @@ export function PreviewModal() {
                   transition: supportsBack
                     ? "transform 600ms cubic-bezier(0.4, 0.0, 0.2, 1)"
                     : "none",
-                  // Vertical tags hinge left↔right (rotateY); horizontal
-                  // tags hinge top↔bottom (rotateX) — pivot follows the
-                  // tag's hang edge.
-                  transform: (() => {
-                    const axis = lengthMm > widthMm ? "X" : "Y";
-                    return effectiveSide === "front"
-                      ? `rotate${axis}(0deg)`
-                      : `rotate${axis}(180deg)`;
-                  })(),
+                  // Only hang tags hinge top↔bottom (rotateX) when
+                  // landscape; every other product always flips
+                  // left↔right (rotateY). See `flipAxis`.
+                  transform:
+                    effectiveSide === "front"
+                      ? `rotate${flipAxis}(0deg)`
+                      : `rotate${flipAxis}(180deg)`,
                 }}
               >
                 <PreviewFace
@@ -276,6 +279,7 @@ export function PreviewModal() {
                     productConfig.visualGuides,
                     tagOrientation
                   )}
+                  flipAxis={flipAxis}
                 />
                 {supportsBack && (
                   <PreviewFace
@@ -301,6 +305,7 @@ export function PreviewModal() {
                       productConfig.visualGuides,
                       backDesign?.tagOrientation ?? tagOrientation
                     )}
+                    flipAxis={flipAxis}
                   />
                 )}
               </div>
@@ -429,6 +434,7 @@ function PreviewFace({
   cornersMode,
   tagOrientation,
   holePct,
+  flipAxis,
 }: {
   url: string | null;
   label: string;
@@ -443,6 +449,7 @@ function PreviewFace({
   cornersMode: "top" | "all";
   tagOrientation: "vertical" | "horizontal";
   holePct: { cx: number; cy: number; r: number } | null;
+  flipAxis: "X" | "Y";
 }) {
   const { clipPath, borderRadius } = silhouetteCss(
     shape,
@@ -456,7 +463,8 @@ function PreviewFace({
     lengthMm,
     widthMm
   );
-  const backAxis = lengthMm > widthMm ? "X" : "Y";
+  // Back face pre-rotated 180° on the SAME axis as the parent card.
+  const backAxis = flipAxis;
   return (
     <div
       aria-label={label}

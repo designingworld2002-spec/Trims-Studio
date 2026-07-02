@@ -1,9 +1,17 @@
 import { useState } from "react";
-import { LayoutGrid, QrCode, Table2, SquarePen, Barcode } from "lucide-react";
+import {
+  LayoutGrid,
+  QrCode,
+  Table2,
+  SquarePen,
+  Barcode,
+  Shirt,
+} from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { QrCodeModal } from "../QrCodeModal";
 import { BarcodeModal } from "../BarcodeModal";
 import { TableModal } from "../TableModal";
+import { WashcareModal } from "../WashcareModal";
 
 interface Option {
   key: string;
@@ -21,6 +29,7 @@ export function MorePanel() {
   const [qrOpen, setQrOpen] = useState(false);
   const [barcodeOpen, setBarcodeOpen] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
+  const [washcareOpen, setWashcareOpen] = useState(false);
 
   // Woven labels are typically too small (≤25 mm short edge) to carry a
   // scannable QR / barcode — disable both for that product. We check
@@ -65,6 +74,13 @@ export function MorePanel() {
         ? "Not available for woven labels"
         : undefined,
     },
+    // Washcare Signs — universally available for every product.
+    {
+      key: "washcare",
+      label: "Washcare Signs",
+      icon: Shirt,
+      onClick: () => setWashcareOpen(true),
+    },
     {
       key: "tables",
       label: "Tables",
@@ -104,6 +120,10 @@ export function MorePanel() {
       </div>
       <QrCodeModal open={qrOpen} onClose={() => setQrOpen(false)} />
       <BarcodeModal open={barcodeOpen} onClose={() => setBarcodeOpen(false)} />
+      <WashcareModal
+        open={washcareOpen}
+        onClose={() => setWashcareOpen(false)}
+      />
       <TableModal open={tableOpen} onClose={() => setTableOpen(false)} />
     </>
   );

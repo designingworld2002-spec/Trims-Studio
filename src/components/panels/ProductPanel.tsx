@@ -34,6 +34,9 @@ export function ProductPanel() {
   const toggleOrientation = useCanvasStore((s) => s.toggleOrientation);
   const productHandle = useCanvasStore((s) => s.productConfig.handle);
   const presetSizes = useCanvasStore((s) => s.productConfig.presetSizes);
+  const fixedSizesOnly = useCanvasStore(
+    (s) => s.productConfig.fixedSizesOnly ?? false
+  );
   const mode = useCanvasStore((s) => s.mode);
 
   const isHorizontal = lengthMm >= widthMm;
@@ -117,43 +120,56 @@ export function ProductPanel() {
         </div>
       )}
 
-      {/* Length / Width with optional chain link */}
-      <div className="flex items-end gap-2">
-        <NumField
-          label="Length (mm)"
-          value={lengthMm}
-          onChange={updateLength}
-        />
-        {showLinkToggle && (
-          <ChainButton
-            isLocked={isLocked}
-            onToggle={() => setLocked(!isLocked)}
-          />
-        )}
-        {!showLinkToggle && (
-          // Template mode: keep the same horizontal rhythm with a spacer +
-          // a static lock-confirm icon so users see why the fields are tied.
-          <div
-            className="h-9 w-9 mb-px rounded-md flex items-center justify-center text-vp-muted"
-            title="Locked to template aspect ratio"
-            aria-hidden="true"
-          >
-            <Link2 className="w-4 h-4" />
+      {/* Length / Width with optional chain link. HIDDEN for
+          fixed-size-only products — those can only change size via the
+          preset pills below (no free-form custom dimensions). */}
+      {!fixedSizesOnly && (
+        <>
+          <div className="flex items-end gap-2">
+            <NumField
+              label="Length (mm)"
+              value={lengthMm}
+              onChange={updateLength}
+            />
+            {showLinkToggle && (
+              <ChainButton
+                isLocked={isLocked}
+                onToggle={() => setLocked(!isLocked)}
+              />
+            )}
+            {!showLinkToggle && (
+              // Template mode: keep the same horizontal rhythm with a
+              // spacer + a static lock-confirm icon so users see why the
+              // fields are tied.
+              <div
+                className="h-9 w-9 mb-px rounded-md flex items-center justify-center text-vp-muted"
+                title="Locked to template aspect ratio"
+                aria-hidden="true"
+              >
+                <Link2 className="w-4 h-4" />
+              </div>
+            )}
+            <NumField
+              label="Width (mm)"
+              value={widthMm}
+              onChange={updateWidth}
+            />
           </div>
-        )}
-        <NumField
-          label="Width (mm)"
-          value={widthMm}
-          onChange={updateWidth}
-        />
-      </div>
 
-      <p className="text-[11px] text-vp-muted">
-        Length is the long edge of the product, width is the short edge.
-        {isLocked
-          ? " Dimensions are linked — changing one updates the other."
-          : " Dimensions are independent."}
-      </p>
+          <p className="text-[11px] text-vp-muted">
+            Length is the long edge of the product, width is the short edge.
+            {isLocked
+              ? " Dimensions are linked — changing one updates the other."
+              : " Dimensions are independent."}
+          </p>
+        </>
+      )}
+
+      {fixedSizesOnly && (
+        <p className="text-[11px] text-vp-muted">
+          This product ships in fixed sizes — pick one below.
+        </p>
+      )}
 
       {/* Preset sizes — derived from the current aspect ratio so the
           design never distorts when a preset is clicked. */}
@@ -408,6 +424,111 @@ function ShapeSelection() {
         Shape
       </label>
 
+      {/* Corner controls FIRST (per client spec) — the active shape's
+          modifier slider + the Top/All corners toggle render ABOVE the
+          shapes gallery so the fine-tuning sits next to the heading. */}
+      <div className="mb-4 empty:mb-0">
+        {shape === "round-corners" && (
+          <ModifierSlider
+            label="Corner rounding"
+            value={radius}
+            max={maxModifier}
+            onChange={(v) => updateModifiers({ cornerRadiusMm: v })}
+          />
+        )}
+        {shape === "cut-corners" && (
+          <ModifierSlider
+            label="Slant length"
+            value={slant}
+            max={maxModifier}
+            onChange={(v) => updateModifiers({ slantLengthMm: v })}
+          />
+        )}
+        {shape === "star" && (
+          <ModifierSlider
+            label="Number of points"
+            value={modifiers.starPoints}
+            min={5}
+            max={12}
+            step={1}
+            suffix=""
+            onChange={(v) => updateModifiers({ starPoints: v })}
+          />
+        )}
+        {shape === "scalloped" && (
+          <ModifierSlider
+            label="Scallop radius"
+            value={radius}
+            max={maxModifier}
+            onChange={(v) => updateModifiers({ cornerRadiusMm: v })}
+          />
+        )}
+        {(shape === "pointed-top" || shape === "hexagon-pointed") && (
+          <ModifierSlider
+            label="Point height"
+            value={slant}
+            max={maxModifier}
+            onChange={(v) => updateModifiers({ slantLengthMm: v })}
+          />
+        )}
+        {shape === "flared" && (
+          <ModifierSlider
+            label="Waist depth"
+            value={slant}
+            max={maxModifier}
+            onChange={(v) => updateModifiers({ slantLengthMm: v })}
+          />
+        )}
+        {shape === "mixed-cut-round" && (
+          <ModifierSlider
+            label="Corner size"
+            value={slant}
+            max={maxModifier}
+            // Drive both the top slant AND the bottom corner radius from a
+            // single slider so the silhouette stays balanced.
+            onChange={(v) =>
+              updateModifiers({ slantLengthMm: v, cornerRadiusMm: v })
+            }
+          />
+        )}
+        {shape === "boutique" && (
+          <ModifierSlider
+            label="Curve depth"
+            value={slant}
+            max={maxModifier}
+            onChange={(v) => updateModifiers({ slantLengthMm: v })}
+          />
+        )}
+        {shape === "barrel" && (
+          <ModifierSlider
+            label="Bulge depth"
+            value={slant}
+            max={maxModifier}
+            onChange={(v) => updateModifiers({ slantLengthMm: v })}
+          />
+        )}
+        {shape === "ticket" && (
+          <ModifierSlider
+            label="Notch size"
+            value={radius}
+            max={maxModifier}
+            onChange={(v) => updateModifiers({ cornerRadiusMm: v })}
+          />
+        )}
+        {/* arch + pill take no slider — geometry is fully derived from
+            the bleed's length × width. */}
+
+        {/* "Top corners" / "All corners" segmented control — only
+            meaningful for round + cut. Standard luggage-tag profile is
+            top-only. */}
+        {supportsCornersMode && (
+          <CornersModeToggle
+            value={modifiers.cornersMode}
+            onChange={(v) => updateModifiers({ cornersMode: v })}
+          />
+        )}
+      </div>
+
       <div className="grid grid-cols-4 gap-1.5">
         {visibleShapes.map((t) => {
           const active = shape === t.key;
@@ -433,106 +554,6 @@ function ShapeSelection() {
           );
         })}
       </div>
-
-      {/* Conditional sliders. */}
-      {shape === "round-corners" && (
-        <ModifierSlider
-          label="Corner rounding"
-          value={radius}
-          max={maxModifier}
-          onChange={(v) => updateModifiers({ cornerRadiusMm: v })}
-        />
-      )}
-      {shape === "cut-corners" && (
-        <ModifierSlider
-          label="Slant length"
-          value={slant}
-          max={maxModifier}
-          onChange={(v) => updateModifiers({ slantLengthMm: v })}
-        />
-      )}
-      {shape === "star" && (
-        <ModifierSlider
-          label="Number of points"
-          value={modifiers.starPoints}
-          min={5}
-          max={12}
-          step={1}
-          suffix=""
-          onChange={(v) => updateModifiers({ starPoints: v })}
-        />
-      )}
-      {shape === "scalloped" && (
-        <ModifierSlider
-          label="Scallop radius"
-          value={radius}
-          max={maxModifier}
-          onChange={(v) => updateModifiers({ cornerRadiusMm: v })}
-        />
-      )}
-      {(shape === "pointed-top" || shape === "hexagon-pointed") && (
-        <ModifierSlider
-          label="Point height"
-          value={slant}
-          max={maxModifier}
-          onChange={(v) => updateModifiers({ slantLengthMm: v })}
-        />
-      )}
-      {shape === "flared" && (
-        <ModifierSlider
-          label="Waist depth"
-          value={slant}
-          max={maxModifier}
-          onChange={(v) => updateModifiers({ slantLengthMm: v })}
-        />
-      )}
-      {shape === "mixed-cut-round" && (
-        <ModifierSlider
-          label="Corner size"
-          value={slant}
-          max={maxModifier}
-          // Drive both the top slant AND the bottom corner radius from a
-          // single slider so the silhouette stays balanced.
-          onChange={(v) =>
-            updateModifiers({ slantLengthMm: v, cornerRadiusMm: v })
-          }
-        />
-      )}
-      {shape === "boutique" && (
-        <ModifierSlider
-          label="Curve depth"
-          value={slant}
-          max={maxModifier}
-          onChange={(v) => updateModifiers({ slantLengthMm: v })}
-        />
-      )}
-      {shape === "barrel" && (
-        <ModifierSlider
-          label="Bulge depth"
-          value={slant}
-          max={maxModifier}
-          onChange={(v) => updateModifiers({ slantLengthMm: v })}
-        />
-      )}
-      {shape === "ticket" && (
-        <ModifierSlider
-          label="Notch size"
-          value={radius}
-          max={maxModifier}
-          onChange={(v) => updateModifiers({ cornerRadiusMm: v })}
-        />
-      )}
-      {/* arch + pill take no slider — geometry is fully derived from
-          the bleed's length × width. */}
-
-      {/* "Top corners" / "All corners" segmented control — only meaningful
-          for round + cut. Standard luggage-tag profile is top-only. */}
-      {supportsCornersMode && (
-        <CornersModeToggle
-          value={modifiers.cornersMode}
-          onChange={(v) => updateModifiers({ cornersMode: v })}
-        />
-      )}
     </div>
   );
 }
@@ -641,12 +662,13 @@ function ModifierSlider({
  * template ratio (so picking one never distorts a loaded design) AND
  * the numbers stay sensible across orientations.
  */
-const PRESET_WIDTHS_MM = [
-  { label: "Small", widthMm: 20 },
-  { label: "Standard", widthMm: 35 },
-  { label: "Medium", widthMm: 50 },
-  { label: "Large", widthMm: 70 },
-];
+const PRESET_WIDTHS_MM: { label: string; widthMm: number; lengthMm?: number }[] =
+  [
+    { label: "Small", widthMm: 20 },
+    { label: "Standard", widthMm: 35 },
+    { label: "Medium", widthMm: 50 },
+    { label: "Large", widthMm: 70 },
+  ];
 
 function SizePresets({
   lengthMm,
@@ -656,22 +678,36 @@ function SizePresets({
 }: {
   lengthMm: number;
   widthMm: number;
-  presetSizes?: { label: string; widthMm: number }[];
+  presetSizes?: { label: string; widthMm: number; lengthMm?: number }[];
   onPick: (lengthMm: number, widthMm: number) => void;
 }) {
-  // Live aspect ratio of the current workspace = active template's
-  // ratio (since each load syncs canvasLengthMm/widthMm to the
-  // saved design's dimensions). Long-edge orientation preserved.
-  const ratio = widthMm > 0 ? lengthMm / widthMm : 1;
-  // Per-product tiers when supplied (e.g. woven Standard=32, Large=67);
-  // otherwise the generic default set.
-  const tiers = presetSizes && presetSizes.length > 0
-    ? presetSizes
-    : PRESET_WIDTHS_MM;
+  // Per-product tiers when supplied (e.g. woven Standard=32); otherwise
+  // the generic default set.
+  const tiers =
+    presetSizes && presetSizes.length > 0 ? presetSizes : PRESET_WIDTHS_MM;
+
+  // Which app field is currently the SHORT edge? `widthMm` is the short
+  // edge for landscape products, but for portrait products (e.g. hang
+  // tags where widthMm is the long edge) it's `lengthMm`. We anchor the
+  // preset's `widthMm` value onto whichever is short so "smaller
+  // dimension" semantics hold in every orientation.
+  const shortEdge = Math.max(1, Math.min(lengthMm, widthMm));
+  const ratio = shortEdge > 0 ? Math.max(lengthMm, widthMm) / shortEdge : 1;
+  const widthIsShort = widthMm <= lengthMm;
+
   const presets = tiers.map((p) => {
-    const newWidth = p.widthMm;
-    const newLength = Math.max(10, Math.round(newWidth * ratio));
-    return { label: p.label, length: newLength, width: newWidth };
+    const shortV = Math.max(10, Math.round(p.widthMm));
+    // Explicit long edge if provided (fully-fixed size), else derive it
+    // from the current aspect ratio so the design never distorts.
+    const longV =
+      p.lengthMm != null
+        ? Math.max(10, Math.round(p.lengthMm))
+        : Math.max(10, Math.round(shortV * ratio));
+    // Map short/long back onto the app's length/width fields, keeping the
+    // current orientation (which field is short) intact.
+    const width = widthIsShort ? shortV : longV;
+    const length = widthIsShort ? longV : shortV;
+    return { label: p.label, length, width };
   });
   return (
     <div>

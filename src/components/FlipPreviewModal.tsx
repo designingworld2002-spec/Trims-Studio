@@ -243,6 +243,12 @@ export function FlipPreviewModal() {
   const supportsBack = productConfig.supportsBackSide;
   const effectiveSide: "front" | "back" = supportsBack ? shownSide : "front";
 
+  // Flip axis: only hang tags flip vertically (rotateX) when landscape;
+  // everything else always flips horizontally (rotateY). Computed once so
+  // the card + both faces share the exact same axis.
+  const flipAxis: "X" | "Y" =
+    productConfig.handle === "hang-tags" && lengthMm > widthMm ? "X" : "Y";
+
   return (
     <div
       role="dialog"
@@ -283,16 +289,13 @@ export function FlipPreviewModal() {
             transition: supportsBack
               ? "transform 700ms cubic-bezier(0.4, 0.0, 0.2, 1)"
               : "none",
-            // Flip axis tracks the tag's hang edge — vertical tags
-            // hinge left↔right (rotateY), horizontal tags hinge
-            // top↔bottom (rotateX).
-            transform: (() => {
-              const horizontal = lengthMm > widthMm;
-              const axis = horizontal ? "X" : "Y";
-              return effectiveSide === "front"
-                ? `rotate${axis}(0deg)`
-                : `rotate${axis}(180deg)`;
-            })(),
+            // Flip axis: only hang tags flip vertically (rotateX) when
+            // landscape; all other products always flip horizontally
+            // (rotateY), regardless of aspect ratio. See `flipAxis`.
+            transform:
+              effectiveSide === "front"
+                ? `rotate${flipAxis}(0deg)`
+                : `rotate${flipAxis}(180deg)`,
           }}
         >
           <SnapshotFace
@@ -314,6 +317,7 @@ export function FlipPreviewModal() {
               productConfig.visualGuides,
               tagOrientation
             )}
+            flipAxis={flipAxis}
           />
           {supportsBack && (
             <SnapshotFace
@@ -338,6 +342,7 @@ export function FlipPreviewModal() {
                 productConfig.visualGuides,
                 backDesign?.tagOrientation ?? tagOrientation
               )}
+              flipAxis={flipAxis}
             />
           )}
         </div>
@@ -412,6 +417,7 @@ function SnapshotFace({
   blendMode,
   opacity,
   holePct,
+  flipAxis,
 }: {
   url: string | null;
   label: string;
@@ -427,6 +433,7 @@ function SnapshotFace({
   blendMode: "multiply" | "overlay" | "soft-light" | "hard-light";
   opacity: number;
   holePct: { cx: number; cy: number; r: number } | null;
+  flipAxis: "X" | "Y";
 }) {
   const { clipPath, borderRadius } = silhouetteCss(
     shape,
@@ -436,10 +443,10 @@ function SnapshotFace({
     widthMm
   );
 
-  // Back face is pre-rotated 180° along the SAME axis the card flips
-  // on, so it lands upright when the card finishes its rotation. Axis
-  // must match the parent (`lengthMm > widthMm` → X-axis, else Y).
-  const backAxis = lengthMm > widthMm ? "X" : "Y";
+  // Back face is pre-rotated 180° along the SAME axis the card flips on
+  // (passed down from the parent), so it lands upright when the card
+  // finishes its rotation.
+  const backAxis = flipAxis;
   return (
     <div
       aria-label={label}

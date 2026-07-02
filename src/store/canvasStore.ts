@@ -1607,7 +1607,12 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
               ? JSON.parse(targetSnap.fabric)
               : { ...(targetSnap.fabric || {}) };
           fabricPayload.background = targetSnap.backgroundColor;
-          designOps.loadJson(fabricPayload, targetLen, targetWid);
+          // Side snapshots are ALREADY sized for the current bleed — skip
+          // the fit-to-bleed rescale so objects (incl. fabric.Path signs)
+          // never shift / inflate across Front↔Back switches.
+          designOps.loadJson(fabricPayload, targetLen, targetWid, {
+            skipFit: true,
+          });
         } catch (e) {
           console.warn("[loadActiveSideJson] failed to load target:", e);
           designOps.clearAll();
@@ -1647,7 +1652,8 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
                 ? JSON.parse(frontSnap.fabric)
                 : { ...(frontSnap.fabric || {}) };
             fabricPayload.background = frontSnap.backgroundColor;
-            designOps.loadJson(fabricPayload, len, wid);
+            // Front snapshot is already sized for the bleed — skip fit.
+            designOps.loadJson(fabricPayload, len, wid, { skipFit: true });
           } catch (e) {
             console.warn("[clearBackDesign] failed to restore front:", e);
           }
