@@ -2074,6 +2074,38 @@ export function Workspace() {
           );
           // Apply the safe-area clipPath to every restored object.
           applySafeAreaClipToAllObjects(canvas, guidesRef.current);
+
+          // ── Seed a pre-authored BACK design, if the template ships one ──
+          // Two-sided Trims templates may carry a top-level `back` fabric
+          // payload alongside the (front) `fabric`. Seeding it into the store
+          // makes the Front/Back toggle load it directly — skipping the
+          // "start the back" chooser — so the back shows up pre-filled.
+          //
+          // Back payloads are authored in FINAL canvas coordinates (centred
+          // in the 2000² stage) and loaded with `skipFit`, so — unlike the
+          // cover-fit front — they must already sit inside the bleed.
+          try {
+            const rawBack = (raw as any)?.back;
+            const backPayload = rawBack
+              ? sanitizeFabricPayload(extractFabricPayload(rawBack))
+              : null;
+            if (backPayload && Array.isArray(backPayload.objects)) {
+              const st = useCanvasStore.getState();
+              st.setBackDesign({
+                fabric: backPayload,
+                backgroundColor:
+                  (typeof backPayload.background === "string" &&
+                    backPayload.background) ||
+                  st.backgroundColor,
+                tagOrientation: st.tagOrientation,
+                lengthMm,
+                widthMm,
+              });
+            }
+          } catch (err) {
+            console.warn("[trims-studio] Back template seed failed:", err);
+          }
+
           // Resume + take ONE snapshot representing the loaded template.
           hist?.resume(true);
         });
