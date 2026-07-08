@@ -1,6 +1,4 @@
-import { useState } from "react";
 import { useCanvasStore } from "@/store/canvasStore";
-import { ConfirmDeleteModal } from "./ConfirmDeleteModal";
 
 /**
  * Floating Front / Back side switcher — pill-shaped segmented control
@@ -22,8 +20,9 @@ export function SideToggle() {
   const previewMode = useCanvasStore((s) => s.previewMode);
   const backDesign = useCanvasStore((s) => s.backDesign);
   const setBackChooserOpen = useCanvasStore((s) => s.setBackChooserOpen);
-  const clearBackDesign = useCanvasStore((s) => s.clearBackDesign);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const setConfirmDeleteBackOpen = useCanvasStore(
+    (s) => s.setConfirmDeleteBackOpen
+  );
 
   if (!supportsBack || previewMode) return null;
 
@@ -40,11 +39,7 @@ export function SideToggle() {
     setActiveSide(side);
   };
 
-  const onClearBack = () => setConfirmOpen(true);
-  const onConfirmClear = () => {
-    setConfirmOpen(false);
-    clearBackDesign();
-  };
+  const onClearBack = () => setConfirmDeleteBackOpen(true);
 
   const showTrash = backDesign || activeSide === "back";
 
@@ -112,15 +107,6 @@ export function SideToggle() {
           </svg>
         </button>
       )}
-      <ConfirmDeleteModal
-        open={confirmOpen}
-        title="Remove back design?"
-        message="Your back-side artwork will be discarded. This can't be undone."
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
-        onConfirm={onConfirmClear}
-        onCancel={() => setConfirmOpen(false)}
-      />
     </div>
   );
 }

@@ -13,6 +13,22 @@ export function TopBar() {
   const setPreviewOpen = useCanvasStore((s) => s.setPreviewOpen);
   const setPreviewFlipOpen = useCanvasStore((s) => s.setPreviewFlipOpen);
   const setTourActive = useCanvasStore((s) => s.setTourActive);
+  const backDesign = useCanvasStore((s) => s.backDesign);
+  const activeSide = useCanvasStore((s) => s.activeSide);
+  const setNextBackCheckOpen = useCanvasStore((s) => s.setNextBackCheckOpen);
+
+  // A design is 2-sided if a back snapshot exists OR the user is actively
+  // on the back side (blank-start hasn't been snapshotted yet). In that
+  // case, intercept "Next" with a price-transparency confirmation instead
+  // of jumping straight to Preview/Finalize.
+  const handleNext = () => {
+    const hasBackSide = !!backDesign || activeSide === "back";
+    if (hasBackSide) {
+      setNextBackCheckOpen(true);
+    } else {
+      setPreviewOpen(true);
+    }
+  };
 
   return (
     <header className="h-14 bg-white border-b border-gray-100 shadow-sm flex items-center px-2 sm:px-4 shrink-0 gap-1 z-30 relative">
@@ -95,7 +111,7 @@ export function TopBar() {
           <span>Preview</span>
         </button>
         <button
-          onClick={() => setPreviewOpen(true)}
+          onClick={handleNext}
           className="h-9 px-4 sm:px-6 rounded-full bg-vp-blue hover:bg-vp-blue-hover text-white text-[13px] font-semibold tracking-wide shadow-sm hover:shadow-md transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0"
         >
           Next

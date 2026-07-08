@@ -8,6 +8,8 @@ import { PreviewModal } from "./components/PreviewModal";
 import { UploadCenterModal } from "./components/UploadCenterModal";
 import { BackChooserModal } from "./components/BackChooserModal";
 import { FlipPreviewModal } from "./components/FlipPreviewModal";
+import { NextStepBackCheckModal } from "./components/NextStepBackCheckModal";
+import { ConfirmDeleteBackModal } from "./components/ConfirmDeleteBackModal";
 import { useCanvasStore } from "./store/canvasStore";
 import { history } from "./lib/historyAccessor";
 
@@ -188,6 +190,8 @@ export default function App() {
       <UploadCenterModal />
       <BackChooserModal />
       <FlipPreviewModal />
+      <NextStepBackCheckModal />
+      <ConfirmDeleteBackModal />
     </div>
   );
 }

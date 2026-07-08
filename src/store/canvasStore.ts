@@ -586,7 +586,12 @@ export interface CanvasStoreState {
    * change when the string is the same.
    */
   canvasWarningId: number;
-  setCanvasWarning: (msg: string | null) => void;
+  /**
+   * Visual style of the toast: 'warning' (amber/red — out-of-bounds,
+   * low-res, errors) or 'success' (green — e.g. back side added).
+   */
+  canvasWarningType: "warning" | "success";
+  setCanvasWarning: (msg: string | null, type?: "warning" | "success") => void;
 
   // ---- preview ----
   previewOpen: boolean;
@@ -642,6 +647,18 @@ export interface CanvasStoreState {
   /** Whether the "Change the back" chooser modal is open. */
   backChooserOpen: boolean;
   setBackChooserOpen: (b: boolean) => void;
+  /**
+   * Global "remove back design?" confirmation modal. Opened from the
+   * SideToggle trash button and from the Next-step back check modal.
+   */
+  confirmDeleteBackOpen: boolean;
+  setConfirmDeleteBackOpen: (b: boolean) => void;
+  /**
+   * Global "Next" interception modal shown for 2-sided designs so the
+   * user confirms the (chargeable) back side before proceeding.
+   */
+  nextBackCheckOpen: boolean;
+  setNextBackCheckOpen: (b: boolean) => void;
 
   /**
    * Restore a previously-saved design (both sides + paint + orientation
@@ -1284,12 +1301,14 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
 
   canvasWarning: null,
   canvasWarningId: 0,
-  setCanvasWarning: (msg) => {
+  canvasWarningType: "warning",
+  setCanvasWarning: (msg, type = "warning") => {
     if (msg) {
       // Bump the nonce so the toast re-mounts + replays its animation
       // even when the message text is identical to the one showing.
       set((s) => ({
         canvasWarning: msg,
+        canvasWarningType: type,
         canvasWarningId: s.canvasWarningId + 1,
       }));
       if (warningHideTimer) clearTimeout(warningHideTimer);
@@ -1377,6 +1396,10 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   backDesign: null,
   backChooserOpen: false,
   setBackChooserOpen: (b) => set({ backChooserOpen: b }),
+  confirmDeleteBackOpen: false,
+  setConfirmDeleteBackOpen: (b) => set({ confirmDeleteBackOpen: b }),
+  nextBackCheckOpen: false,
+  setNextBackCheckOpen: (b) => set({ nextBackCheckOpen: b }),
   setFrontDesign: (snap) => set({ frontDesign: snap }),
   setBackDesign: (snap) => set({ backDesign: snap }),
   loadDesign: async (row) => {
@@ -1527,6 +1550,12 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       set({ backChooserOpen: false });
       return;
     }
+    // Any real choice below (duplicate / blank / upload) adds a back side.
+    // Surface a green, price-transparent confirmation toast.
+    get().setCanvasWarning(
+      "Back side added. Price will be calculated accordingly.",
+      "success"
+    );
     if (kind === "duplicate") {
       // Snapshot the LIVE canvas (fabric + paint + orientation + dims).
       // Mirror it to the back so the user starts with an exact copy.
