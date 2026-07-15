@@ -29,6 +29,7 @@ export function PreviewModal() {
   const frontDesign = useCanvasStore((s) => s.frontDesign);
   const backDesign = useCanvasStore((s) => s.backDesign);
   const backgroundColor = useCanvasStore((s) => s.backgroundColor);
+  const material = useCanvasStore((s) => s.material);
   const canvasShapeStore = useCanvasStore((s) => s.canvasShape);
   const shapeModifiersStore = useCanvasStore((s) => s.shapeModifiers);
   const tagOrientation = useCanvasStore((s) => s.tagOrientation);
@@ -181,6 +182,7 @@ export function PreviewModal() {
         frontDesign,
         backDesign,
         supportsBackSide: supportsBack,
+        material,
       });
       clearSafety();
       if (!result?.finalizeUrl) {

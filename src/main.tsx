@@ -6,7 +6,11 @@ import { useCanvasStore } from "./store/canvasStore";
 import { readUrlConfig } from "./lib/urlParams";
 import { getProductConfig } from "./config/productConfig";
 import { installFabricTextareaFix } from "./lib/fabricTextareaFix";
+import { normaliseMaterial } from "./lib/pricing";
 import "./index.css";
+
+/** Products whose size + material must be chosen before designing. */
+const MATERIAL_SETUP_HANDLES = ["washcare-labels", "size-labels"];
 
 // Pin fabric's hidden IText textarea to the viewport corner so the browser
 // never auto-scrolls when text editing begins under our CSS-scaled canvas.
@@ -49,6 +53,22 @@ installFabricTextareaFix();
     // sidebar — gives the user a clearer first-touch experience.
     s.setUploadModalOpen(true);
     s.setActiveTool("uploads");
+  }
+
+  // ── Material ────────────────────────────────────────────────────────────
+  // An explicit `?material=` wins; otherwise infer it from the product handle
+  // (cotton-printed-labels → Cotton, …), falling back to Woven. Washcare /
+  // size labels don't imply a material, so they get the setup modal instead.
+  const materialParam = new URLSearchParams(window.location.search).get(
+    "material"
+  );
+  s.setMaterial(normaliseMaterial(materialParam ?? productConfig.handle));
+
+  if (
+    !materialParam &&
+    MATERIAL_SETUP_HANDLES.includes(productConfig.handle)
+  ) {
+    s.setMaterialSetupOpen(true);
   }
 
   // Snapshot the boot URL so the "Revert to original template" pill can

@@ -3,10 +3,17 @@ import { Cloud, Eye, HelpCircle, Redo2, Undo2 } from "lucide-react";
 const ICON_STROKE = 1.6;
 import { useCanvasStore } from "@/store/canvasStore";
 import { history } from "@/lib/historyAccessor";
+import { calculateBasePrice, formatPrice } from "@/lib/pricing";
 import { StudioLogo } from "./StudioLogo";
+
+/** Every Studio quote is shown against the 500-unit MOQ. */
+const QUOTE_QTY = 500;
 
 export function TopBar() {
   const productTitle = useCanvasStore((s) => s.productTitle);
+  const lengthMm = useCanvasStore((s) => s.canvasLengthMm);
+  const widthMm = useCanvasStore((s) => s.canvasWidthMm);
+  const material = useCanvasStore((s) => s.material);
   const canUndo = useCanvasStore((s) => s.canUndo);
   const canRedo = useCanvasStore((s) => s.canRedo);
   const lastSavedAt = useCanvasStore((s) => s.lastSavedAt);
@@ -18,11 +25,23 @@ export function TopBar() {
   const setNextBackCheckOpen = useCanvasStore((s) => s.setNextBackCheckOpen);
 
   // A design is 2-sided if a back snapshot exists OR the user is actively
-  // on the back side (blank-start hasn't been snapshotted yet). In that
-  // case, intercept "Next" with a price-transparency confirmation instead
-  // of jumping straight to Preview/Finalize.
+  // on the back side (blank-start hasn't been snapshotted yet).
+  const hasBackSide = !!backDesign || activeSide === "back";
+
+  // Live base quote — recomputes whenever the canvas is resized or the
+  // material changes. Mirrors the finalize page's formula (incl. the
+  // two-sided ×1.5), minus the finishing add-ons chosen at checkout.
+  const livePrice = calculateBasePrice(
+    lengthMm,
+    widthMm,
+    material,
+    QUOTE_QTY,
+    { hasBackPanel: hasBackSide }
+  );
+
+  // If the design is 2-sided, intercept "Next" with a price-transparency
+  // confirmation instead of jumping straight to Preview/Finalize.
   const handleNext = () => {
-    const hasBackSide = !!backDesign || activeSide === "back";
     if (hasBackSide) {
       setNextBackCheckOpen(true);
     } else {
@@ -40,9 +59,21 @@ export function TopBar() {
         </span>
       </div>
 
-      {/* Product title */}
-      <div className="px-2 sm:px-5 text-[13px] font-medium text-vp-ink/70 truncate min-w-0 flex-1 md:flex-initial">
-        {productTitle}
+      {/* Product title + live base quote */}
+      <div className="px-2 sm:px-5 min-w-0 flex-1 md:flex-initial">
+        <div className="text-[13px] font-medium text-vp-ink/70 truncate leading-tight">
+          {productTitle}
+        </div>
+        <div
+          data-tour="live-price"
+          className="text-[11px] text-vp-muted truncate leading-tight tabular-nums mt-0.5"
+        >
+          For {lengthMm} × {widthMm} mm •{" "}
+          <span className="font-semibold text-vp-ink/80">
+            Rs. {formatPrice(livePrice)}
+          </span>{" "}
+          / {QUOTE_QTY} units
+        </div>
       </div>
 
       {/* Center: auto-save + undo/redo. Hidden on mobile to free up space;

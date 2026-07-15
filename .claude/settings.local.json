@@ -27,7 +27,8 @@
       "PowerShell(npx tsc --noEmit -p tsconfig.app.json 2>&1)",
       "PowerShell(npx tsc --noEmit -p tsconfig.app.json)",
       "Bash(node \"C:/Users/Varun/AppData/Local/Temp/claude/C--Users-Varun-Downloads-Trims-studio/34a491c4-662e-47bf-bb12-85c5415fa9da/scratchpad/gen-finalize-test.cjs\")",
-      "Bash(node \"C:/Users/Varun/AppData/Local/Temp/claude/C--Users-Varun-Downloads-Trims-studio/34a491c4-662e-47bf-bb12-85c5415fa9da/scratchpad/gen-rose-molly.cjs\")"
+      "Bash(node \"C:/Users/Varun/AppData/Local/Temp/claude/C--Users-Varun-Downloads-Trims-studio/34a491c4-662e-47bf-bb12-85c5415fa9da/scratchpad/gen-rose-molly.cjs\")",
+      "Bash(node \"C:/Users/Varun/AppData/Local/Temp/claude/C--Users-Varun-Downloads-Trims-studio/34a491c4-662e-47bf-bb12-85c5411212/scratchpad/gen-finalize-test.cjs\")"
     ]
   }
 }

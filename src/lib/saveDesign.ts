@@ -11,6 +11,7 @@ import type {
   SideSnapshot,
 } from "@/store/canvasStore";
 import { getProductConfig, type VisualGuides } from "@/config/productConfig";
+import type { Material } from "@/lib/pricing";
 
 /**
  * Final "Continue" save flow.
@@ -54,6 +55,9 @@ export interface SaveDesignInput {
   backDesign: SideSnapshot | null;
   /** Does the active product support a back side? */
   supportsBackSide: boolean;
+  /** Fabric material — forwarded to the finalize page as `?material=` so the
+   *  storefront prices with the same formula the Studio quoted. */
+  material: Material;
 }
 
 export interface SaveDesignResult {
@@ -1301,6 +1305,8 @@ function buildFinalizeUrl(opts: {
     u.searchParams.set("product", opts.input.productSlug);
   u.searchParams.set("length", String(opts.input.lengthMm));
   u.searchParams.set("width", String(opts.input.widthMm));
+  // Material drives the storefront's pricing branch (Woven/Cotton/Satin/Taffeta).
+  u.searchParams.set("material", opts.input.material);
   if (opts.input.customerId)
     u.searchParams.set("customer_id", opts.input.customerId);
   // Tag orientation — kept as informative metadata for the production

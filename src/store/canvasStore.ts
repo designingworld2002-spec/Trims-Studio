@@ -7,6 +7,7 @@ import {
   type ProductConfig,
 } from "@/config/productConfig";
 import { buildBarcodeApiUrl } from "@/lib/barcode";
+import type { Material } from "@/lib/pricing";
 
 /**
  * User-selectable silhouette for the active product. Replaces the old
@@ -445,6 +446,21 @@ export interface CanvasStoreState {
    */
   productConfig: ProductConfig;
   setProductConfig: (c: ProductConfig) => void;
+
+  /**
+   * Fabric material the label is printed/woven on. Drives live pricing in the
+   * TopBar + setup modal, and is forwarded to the finalize page (`?material=`)
+   * so the storefront prices with the same formula.
+   */
+  material: Material;
+  setMaterial: (m: Material) => void;
+
+  /**
+   * Onboarding modal shown on load for products whose size + material aren't
+   * implied by the product itself (washcare-labels / size-labels).
+   */
+  materialSetupOpen: boolean;
+  setMaterialSetupOpen: (b: boolean) => void;
 
   /** Shopify customer.id when the storefront passes it. `null` = anonymous. */
   customerId: string | null;
@@ -941,6 +957,12 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       canvasShape: next as CanvasShape,
     });
   },
+
+  material: "Woven",
+  setMaterial: (m) => set({ material: m }),
+
+  materialSetupOpen: false,
+  setMaterialSetupOpen: (b) => set({ materialSetupOpen: b }),
 
   customerId: null,
   setCustomerId: (id) => set({ customerId: id }),

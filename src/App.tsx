@@ -10,6 +10,7 @@ import { BackChooserModal } from "./components/BackChooserModal";
 import { FlipPreviewModal } from "./components/FlipPreviewModal";
 import { NextStepBackCheckModal } from "./components/NextStepBackCheckModal";
 import { ConfirmDeleteBackModal } from "./components/ConfirmDeleteBackModal";
+import { MaterialSetupModal } from "./components/MaterialSetupModal";
 import { useCanvasStore } from "./store/canvasStore";
 import { history } from "./lib/historyAccessor";
 
@@ -192,6 +193,7 @@ export default function App() {
       <FlipPreviewModal />
       <NextStepBackCheckModal />
       <ConfirmDeleteBackModal />
+      <MaterialSetupModal />
     </div>
   );
 }
