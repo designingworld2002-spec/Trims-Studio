@@ -1,4 +1,5 @@
 import type { CanvasShape, ToolKey } from "@/store/canvasStore";
+import type { Material } from "@/lib/pricing";
 
 /**
  * Configuration-driven product architecture.
@@ -311,4 +312,44 @@ export function getProductConfig(
     return PRODUCT_CONFIGS["woven-labels"];
 
   return PRODUCT_CONFIGS[DEFAULT_PRODUCT_HANDLE];
+}
+
+/**
+ * Products where the USER picks the manufacturing material (via the setup
+ * modal) — and where that choice overrides the product's default
+ * capabilities. Every other product's material is implied by its handle,
+ * so its config is never touched.
+ */
+export const MATERIAL_CONFIGURABLE_HANDLES = [
+  "washcare-labels",
+  "size-labels",
+];
+
+/**
+ * Derive the EFFECTIVE product config for a chosen material.
+ *
+ *   Woven   → single woven face: no back side (QR/barcode are additionally
+ *             gated in the More panel, which checks the material directly).
+ *   Taffeta → stocked white-only: background locked to #ffffff.
+ *   Cotton / Satin → full printed capabilities (pristine base config —
+ *             also RESETS any override left by a previous material pick).
+ *
+ * Always derives from the pristine registry entry passed in, so overrides
+ * never stack. Returns `base` unchanged for non-configurable products.
+ */
+export function applyMaterialOverrides(
+  base: ProductConfig,
+  material: Material
+): ProductConfig {
+  if (!MATERIAL_CONFIGURABLE_HANDLES.includes(base.handle)) return base;
+  switch (material) {
+    case "Woven":
+      return { ...base, supportsBackSide: false };
+    case "Taffeta":
+      return { ...base, backgroundColors: ["#ffffff"] };
+    case "Cotton":
+    case "Satin":
+    default:
+      return { ...base };
+  }
 }

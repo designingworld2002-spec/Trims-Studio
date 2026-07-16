@@ -342,14 +342,21 @@ export function PreviewModal() {
             )}
           </ul>
 
-          <label className="flex items-start gap-2 text-sm">
+          {/* Design confirmation — the WHOLE row is the click target (the
+              label wraps both the checkbox and the text), and it's styled
+              as a bold, highlighted card so it can't be missed. */}
+          <label
+            htmlFor="design-confirm-checkbox"
+            className="flex items-start gap-3 p-3 rounded-lg bg-vp-rail/70 border border-vp-border cursor-pointer select-none hover:bg-vp-blue-light hover:border-vp-blue/40 transition-colors"
+          >
             <input
+              id="design-confirm-checkbox"
               type="checkbox"
               checked={authorized}
               onChange={(e) => setAuthorized(e.target.checked)}
-              className="mt-0.5"
+              className="mt-0.5 h-4 w-4 shrink-0 accent-vp-blue cursor-pointer"
             />
-            <span>
+            <span className="text-sm font-semibold text-vp-ink leading-snug">
               I have authorization to use the design. I have reviewed and
               approve it.
             </span>

@@ -8,6 +8,7 @@ import {
   Shirt,
 } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
+import { MATERIAL_CONFIGURABLE_HANDLES } from "@/config/productConfig";
 import { QrCodeModal } from "../QrCodeModal";
 import { BarcodeModal } from "../BarcodeModal";
 import { TableModal } from "../TableModal";
@@ -31,12 +32,19 @@ export function MorePanel() {
   const [tableOpen, setTableOpen] = useState(false);
   const [washcareOpen, setWashcareOpen] = useState(false);
 
-  // Woven labels are typically too small (≤25 mm short edge) to carry a
-  // scannable QR / barcode — disable both for that product. We check
-  // BOTH the URL slug and the resolved config handle so aliases
-  // ("woven_labels", "Woven Labels") are caught too.
+  // Woven manufacturing is too fine to carry a scannable QR / barcode —
+  // disable both. This is true for the woven-labels PRODUCT (checked via
+  // URL slug + resolved handle so aliases are caught), and ALSO when the
+  // user picks the "Woven" material for a material-configurable product
+  // (washcare / size labels) — the material dictates the feature set.
+  const material = useCanvasStore((s) => s.material);
+  const wovenByMaterial =
+    material === "Woven" &&
+    MATERIAL_CONFIGURABLE_HANDLES.includes(productHandle);
   const isWoven =
-    productSlug === "woven-labels" || productHandle === "woven-labels";
+    productSlug === "woven-labels" ||
+    productHandle === "woven-labels" ||
+    wovenByMaterial;
   const qrDisabled = isWoven;
   const barcodeDisabled = isWoven;
 

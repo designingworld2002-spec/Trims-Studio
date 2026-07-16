@@ -4,6 +4,7 @@ import type { StudioMode } from "@/lib/urlParams";
 import { history } from "@/lib/historyAccessor";
 import {
   getProductConfig,
+  applyMaterialOverrides,
   type ProductConfig,
 } from "@/config/productConfig";
 import { buildBarcodeApiUrl } from "@/lib/barcode";
@@ -959,7 +960,19 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   },
 
   material: "Woven",
-  setMaterial: (m) => set({ material: m }),
+  setMaterial: (m) => {
+    set({ material: m });
+    // Material OVERRIDES the product's default capabilities for the
+    // material-configurable products (washcare / size labels): Woven kills
+    // the back side, Taffeta locks the background to white, Cotton/Satin
+    // restore the pristine printed feature set. Always derived from the
+    // registry entry so overrides never stack.
+    const base = getProductConfig(get().productConfig.handle);
+    const effective = applyMaterialOverrides(base, m);
+    if (effective !== base) {
+      get().setProductConfig(effective);
+    }
+  },
 
   materialSetupOpen: false,
   setMaterialSetupOpen: (b) => set({ materialSetupOpen: b }),

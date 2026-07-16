@@ -14,6 +14,7 @@ export function TopBar() {
   const lengthMm = useCanvasStore((s) => s.canvasLengthMm);
   const widthMm = useCanvasStore((s) => s.canvasWidthMm);
   const material = useCanvasStore((s) => s.material);
+  const productHandle = useCanvasStore((s) => s.productConfig.handle);
   const canUndo = useCanvasStore((s) => s.canUndo);
   const canRedo = useCanvasStore((s) => s.canRedo);
   const lastSavedAt = useCanvasStore((s) => s.lastSavedAt);
@@ -31,12 +32,13 @@ export function TopBar() {
   // Live base quote — recomputes whenever the canvas is resized or the
   // material changes. Mirrors the finalize page's formula (incl. the
   // two-sided ×1.5), minus the finishing add-ons chosen at checkout.
+  // Hangtags mirror the finalize page's flat placeholder (qty × 1).
   const livePrice = calculateBasePrice(
     lengthMm,
     widthMm,
     material,
     QUOTE_QTY,
-    { hasBackPanel: hasBackSide }
+    { hasBackPanel: hasBackSide, productHandle }
   );
 
   // If the design is 2-sided, intercept "Next" with a price-transparency

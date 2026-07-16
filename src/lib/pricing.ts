@@ -31,14 +31,35 @@ export const MATERIAL_LABELS: Record<Material, string> = {
 };
 
 /**
- * Coerce anything (URL param, product handle, "Cotton Printed", …) into a
- * canonical Material. Defaults to Woven.
+ * Try to read a Material out of one string. Returns `null` when the string
+ * carries no material hint — callers can then fall through to the next
+ * source (product handle, title, …) instead of wrongly locking in Woven.
  */
-export function normaliseMaterial(raw: string | null | undefined): Material {
+export function materialFromString(
+  raw: string | null | undefined
+): Material | null {
   const s = String(raw ?? "").toLowerCase();
   if (s.includes("cotton")) return "Cotton";
   if (s.includes("satin")) return "Satin";
   if (s.includes("taffeta")) return "Taffeta";
+  if (s.includes("woven")) return "Woven";
+  return null;
+}
+
+/**
+ * Coerce a chain of hints (URL param, product handle, title, …) into a
+ * canonical Material — FIRST source with a recognisable hint wins, so a
+ * missing/malformed param falls through to the product handle instead of
+ * silently defaulting to Woven. Defaults to Woven only when NO source
+ * matches.
+ */
+export function normaliseMaterial(
+  ...sources: (string | null | undefined)[]
+): Material {
+  for (const src of sources) {
+    const m = materialFromString(src);
+    if (m) return m;
+  }
   return "Woven";
 }
 
@@ -76,21 +97,36 @@ function materialRate(material: Material, qty: number): number {
  * @param widthMm   Short edge (mm)
  * @param material  Woven | Cotton | Satin | Taffeta
  * @param qty       Total quantity (defaults to the 500-unit MOQ)
- * @param opts.quality       Quality tier — Satin's "Premium" doubles the price
- * @param opts.hasBackPanel  Two-sided design → ×1.5
+ * @param opts.quality        Quality tier — Satin's "Premium" doubles the price
+ * @param opts.hasBackPanel   Two-sided design → ×1.5
+ * @param opts.productHandle  Product handle — hang-tags bypass the material
+ *                            math entirely (see below)
  */
 export function calculateBasePrice(
   lengthMm: number,
   widthMm: number,
   material: Material,
   qty: number = 500,
-  opts: { quality?: Quality; hasBackPanel?: boolean } = {}
+  opts: {
+    quality?: Quality;
+    hasBackPanel?: boolean;
+    productHandle?: string | null;
+  } = {}
 ): number {
   const L = Number(lengthMm);
   const W = Number(widthMm);
   const q = Number(qty);
   if (!isFinite(L) || !isFinite(W) || !isFinite(q) || L <= 0 || W <= 0 || q <= 0) {
     return 0;
+  }
+
+  // ── Hangtags: PLACEHOLDER pricing (mirrors the Liquid dummy) ────────────
+  // The finalize page prices hangtags as a flat `qty × 1` and returns EARLY
+  // — no style, quality, or back-panel modifiers. Mirror that exactly so the
+  // Studio quote matches until the client supplies the real hangtag formula.
+  // Detection mirrors Liquid's `/hang/i.test(paramProduct)`.
+  if (opts.productHandle && /hang/i.test(opts.productHandle)) {
+    return q * 1;
   }
 
   const areaFactor = (L * W) / 645;

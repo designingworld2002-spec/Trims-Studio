@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { Link as LinkIcon, Unlink } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useCanvasStore } from "@/store/canvasStore";
+import { readUrlConfig } from "@/lib/urlParams";
 import {
   MATERIALS,
   MATERIAL_LABELS,
@@ -12,15 +12,32 @@ import {
 /** Every quote in the Studio is shown against the 500-unit MOQ. */
 const QUOTE_QTY = 500;
 
+interface SizeOption {
+  /** Pill label — the anchored Width (standard tape width). */
+  label: string;
+  /** Width (mm) — the SHORT edge, anchored by the pill. */
+  widthMm: number;
+  /** Length (mm) — derived from the initial URL ratio, ratio-locked. */
+  lengthMm: number;
+}
+
+/** "18.75" / "42" — trims trailing zeros for the pill captions. */
+function fmtMm(v: number): string {
+  return String(Math.round(v * 100) / 100);
+}
+
 /**
  * First-touch setup for products whose size + material aren't implied by the
  * product itself (washcare-labels / size-labels). Opened from `main.tsx` on
- * load; on Continue it writes the chosen dimensions + material into the store
- * and reveals the workspace.
+ * load; on Continue it writes the chosen Length × Width + material into the
+ * store (material also re-derives the product's capabilities) and reveals
+ * the workspace.
  *
- * Dimension naming matches the Studio's URL convention:
- *   Width  → `canvasLengthMm` (X / horizontal)
- *   Height → `canvasWidthMm`  (Y / vertical)
+ * Sizes are STRICTLY fixed pills that anchor the WIDTH (the standard tape
+ * widths — washcare: 28/32/40/50 mm · size: 12/15/20 mm). The LENGTH is
+ * derived dynamically from the dimensions the Studio was opened with (the
+ * URL's `length` / `width` params, falling back to the product defaults) so
+ * every pill preserves the exact initial aspect ratio — nothing hardcoded.
  */
 export function MaterialSetupModal() {
   const open = useCanvasStore((s) => s.materialSetupOpen);
@@ -28,61 +45,74 @@ export function MaterialSetupModal() {
   const setCanvasSize = useCanvasStore((s) => s.setCanvasSize);
   const setMaterial = useCanvasStore((s) => s.setMaterial);
   const storeMaterial = useCanvasStore((s) => s.material);
-  const storeLength = useCanvasStore((s) => s.canvasLengthMm);
   const storeWidth = useCanvasStore((s) => s.canvasWidthMm);
+  const productConfig = useCanvasStore((s) => s.productConfig);
   const productTitle = useCanvasStore((s) => s.productTitle);
 
-  // Draft state — seeded from the product's preset default dimensions.
-  const [width, setWidth] = useState(String(storeLength));
-  const [height, setHeight] = useState(String(storeWidth));
-  const [locked, setLocked] = useState(true);
-  const [ratio, setRatio] = useState(
-    storeWidth > 0 ? storeLength / storeWidth : 1
+  // ── Baseline ratio: the INITIAL URL dimensions ──────────────────────────
+  // `readUrlConfig` is the Studio's canonical URL parser (handles the legacy
+  // `?width/height` form too) and falls back to the product's defaults when
+  // the URL omits dimensions. Ratio = initialLength / initialWidth.
+  const { pillWidths, ratio } = useMemo(() => {
+    const cfg = readUrlConfig(productConfig.defaultDimensions);
+    const r = cfg.widthMm > 0 ? cfg.lengthMm / cfg.widthMm : 1;
+    const widths =
+      productConfig.presetSizes && productConfig.presetSizes.length > 0
+        ? productConfig.presetSizes.map((p) => ({
+            label: p.label,
+            widthMm: p.widthMm,
+          }))
+        : [{ label: "Standard", widthMm: cfg.widthMm }];
+    return { pillWidths: widths, ratio: r };
+  }, [productConfig]);
+
+  // Fixed pills: Width anchored to the stock value, Length ratio-locked to
+  // the initial URL proportions (kept to 2 decimals, never snapped).
+  const sizeOptions: SizeOption[] = useMemo(
+    () =>
+      pillWidths.map((p) => ({
+        label: `${p.widthMm} mm`,
+        widthMm: p.widthMm,
+        lengthMm: Math.round(p.widthMm * ratio * 100) / 100,
+      })),
+    [pillWidths, ratio]
   );
+
+  // Default pill: the one matching the current canvas Width, else the
+  // "Standard" preset, else the first.
+  const defaultIndex = useMemo(() => {
+    const byCurrent = sizeOptions.findIndex((o) => o.widthMm === storeWidth);
+    if (byCurrent >= 0) return byCurrent;
+    const byLabel = pillWidths.findIndex((p) => p.label === "Standard");
+    return byLabel >= 0 ? byLabel : 0;
+  }, [sizeOptions, pillWidths, storeWidth]);
+
+  const [sizeIndex, setSizeIndex] = useState(defaultIndex);
   const [material, setLocalMaterial] = useState<Material>(storeMaterial);
 
-  // Re-seed whenever the modal opens (store defaults land before this mounts,
-  // but this keeps the draft honest if it's ever reopened).
+  // Re-seed the draft whenever the modal opens.
   useEffect(() => {
     if (!open) return;
-    setWidth(String(storeLength));
-    setHeight(String(storeWidth));
+    setSizeIndex(defaultIndex);
     setLocalMaterial(storeMaterial);
-    setRatio(storeWidth > 0 ? storeLength / storeWidth : 1);
-  }, [open, storeLength, storeWidth, storeMaterial]);
+  }, [open, defaultIndex, storeMaterial]);
 
   if (!open) return null;
 
-  const w = Number(width);
-  const h = Number(height);
-  const valid = Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0;
-  const price = valid ? calculateBasePrice(w, h, material, QUOTE_QTY) : 0;
-
-  const onWidth = (v: string) => {
-    setWidth(v);
-    const n = Number(v);
-    if (locked && Number.isFinite(n) && n > 0 && ratio > 0) {
-      setHeight(String(Math.max(1, Math.round(n / ratio))));
-    }
-  };
-  const onHeight = (v: string) => {
-    setHeight(v);
-    const n = Number(v);
-    if (locked && Number.isFinite(n) && n > 0) {
-      setWidth(String(Math.max(1, Math.round(n * ratio))));
-    }
-  };
-
-  const toggleLock = () => {
-    // Re-capture the ratio from the CURRENT values when re-engaging the lock,
-    // so it locks what the user actually sees.
-    if (!locked && w > 0 && h > 0) setRatio(w / h);
-    setLocked((v) => !v);
-  };
+  const size = sizeOptions[Math.min(sizeIndex, sizeOptions.length - 1)];
+  // Length / Width map 1:1 onto the pricing engine's (lengthMm, widthMm).
+  const price = calculateBasePrice(
+    size.lengthMm,
+    size.widthMm,
+    material,
+    QUOTE_QTY,
+    { productHandle: productConfig.handle }
+  );
 
   const onContinue = () => {
-    if (!valid) return;
-    setCanvasSize(Math.round(w), Math.round(h));
+    // Length / Width land in the store exactly as derived — the finalize
+    // redirect then forwards them via `?length=` / `?width=` unchanged.
+    setCanvasSize(size.lengthMm, size.widthMm);
     setMaterial(material);
     setOpen(false);
   };
@@ -103,73 +133,49 @@ export function MaterialSetupModal() {
             Set up your {productTitle}
           </h2>
           <p className="text-[13px] text-vp-muted mt-1.5">
-            Pick a size and material to get started — you can change both later.
+            Pick a stock size and material to get started.
           </p>
         </header>
 
-        {/* Dimensions */}
+        {/* Fixed stock sizes — Width anchored, Length ratio-locked */}
         <section className="px-7">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-vp-muted mb-2">
-            Dimensions
+          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-vp-muted mb-1">
+            Size
           </h3>
-          <div className="flex items-end gap-2">
-            <label className="flex-1">
-              <span className="block text-[12px] font-medium text-vp-ink/70 mb-1">
-                Width
-              </span>
-              <div className="relative">
-                <input
-                  type="number"
-                  min={1}
-                  value={width}
-                  onChange={(e) => onWidth(e.target.value)}
-                  className="w-full h-11 pl-3 pr-10 rounded-lg border border-vp-border text-[14px] text-vp-ink focus:outline-none focus:ring-2 focus:ring-vp-accent/30 focus:border-vp-accent"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[12px] text-vp-muted pointer-events-none">
-                  mm
-                </span>
-              </div>
-            </label>
-
-            <button
-              type="button"
-              onClick={toggleLock}
-              aria-pressed={locked}
-              title={locked ? "Aspect ratio locked" : "Aspect ratio unlocked"}
-              aria-label={
-                locked ? "Unlock aspect ratio" : "Lock aspect ratio"
-              }
-              className={[
-                "mb-0.5 flex items-center justify-center h-11 w-11 rounded-lg border transition-colors shrink-0",
-                locked
-                  ? "border-vp-accent bg-vp-accent/10 text-vp-accent"
-                  : "border-vp-border text-vp-ink/50 hover:text-vp-ink hover:bg-vp-rail",
-              ].join(" ")}
-            >
-              {locked ? (
-                <LinkIcon className="w-4 h-4" />
-              ) : (
-                <Unlink className="w-4 h-4" />
-              )}
-            </button>
-
-            <label className="flex-1">
-              <span className="block text-[12px] font-medium text-vp-ink/70 mb-1">
-                Height
-              </span>
-              <div className="relative">
-                <input
-                  type="number"
-                  min={1}
-                  value={height}
-                  onChange={(e) => onHeight(e.target.value)}
-                  className="w-full h-11 pl-3 pr-10 rounded-lg border border-vp-border text-[14px] text-vp-ink focus:outline-none focus:ring-2 focus:ring-vp-accent/30 focus:border-vp-accent"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[12px] text-vp-muted pointer-events-none">
-                  mm
-                </span>
-              </div>
-            </label>
+          <p className="text-[11px] text-vp-muted mb-2.5">
+            Shown as Length × Width — locked to your design's original
+            proportions.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {sizeOptions.map((o, i) => {
+              const active = i === sizeIndex;
+              return (
+                <button
+                  key={o.label}
+                  type="button"
+                  onClick={() => setSizeIndex(i)}
+                  aria-pressed={active}
+                  className={[
+                    "flex flex-col items-center justify-center min-w-[92px] px-4 py-2.5 rounded-xl border transition-all",
+                    active
+                      ? "bg-vp-ink text-white border-vp-ink shadow-sm"
+                      : "bg-white text-vp-ink/75 border-vp-border hover:border-vp-ink hover:text-vp-ink",
+                  ].join(" ")}
+                >
+                  <span className="text-[14px] font-semibold leading-tight">
+                    {o.label}
+                  </span>
+                  <span
+                    className={[
+                      "text-[10.5px] leading-tight mt-0.5 tabular-nums",
+                      active ? "text-white/75" : "text-vp-muted",
+                    ].join(" ")}
+                  >
+                    {fmtMm(o.lengthMm)} × {fmtMm(o.widthMm)} mm
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </section>
 
@@ -208,18 +214,10 @@ export function MaterialSetupModal() {
               Estimated price
             </span>
             <span className="text-[16px] font-bold text-vp-ink tabular-nums">
-              {valid ? (
-                <>
-                  Rs. {formatPrice(price)}{" "}
-                  <span className="text-[12px] font-medium text-vp-muted">
-                    / {QUOTE_QTY} units
-                  </span>
-                </>
-              ) : (
-                <span className="text-[13px] font-medium text-vp-muted">
-                  Enter a valid size
-                </span>
-              )}
+              Rs. {formatPrice(price)}{" "}
+              <span className="text-[12px] font-medium text-vp-muted">
+                / {QUOTE_QTY} units
+              </span>
             </span>
           </div>
           <p className="text-[11px] text-vp-muted mt-2 leading-snug">
@@ -232,8 +230,7 @@ export function MaterialSetupModal() {
           <button
             type="button"
             onClick={onContinue}
-            disabled={!valid}
-            className="w-full h-12 rounded-full bg-vp-blue hover:bg-vp-blue-hover disabled:opacity-40 disabled:cursor-not-allowed text-white text-[14px] font-semibold tracking-wide shadow-sm hover:shadow-md transition-all"
+            className="w-full h-12 rounded-full bg-vp-blue hover:bg-vp-blue-hover text-white text-[14px] font-semibold tracking-wide shadow-sm hover:shadow-md transition-all"
           >
             Continue
           </button>

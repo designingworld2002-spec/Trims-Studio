@@ -11,7 +11,7 @@ import type {
   SideSnapshot,
 } from "@/store/canvasStore";
 import { getProductConfig, type VisualGuides } from "@/config/productConfig";
-import type { Material } from "@/lib/pricing";
+import { normaliseMaterial, type Material } from "@/lib/pricing";
 
 /**
  * Final "Continue" save flow.
@@ -1305,8 +1305,15 @@ function buildFinalizeUrl(opts: {
     u.searchParams.set("product", opts.input.productSlug);
   u.searchParams.set("length", String(opts.input.lengthMm));
   u.searchParams.set("width", String(opts.input.widthMm));
-  // Material drives the storefront's pricing branch (Woven/Cotton/Satin/Taffeta).
-  u.searchParams.set("material", opts.input.material);
+  // Material drives the storefront's pricing branch (Woven/Cotton/Satin/
+  // Taffeta). ALWAYS appended, and normalised through the same chain the
+  // Studio boots with (material state → product slug) so the URL carries
+  // exactly one of the four canonical values even if upstream state ever
+  // regresses — the finalize page must never fall back to the wrong formula.
+  u.searchParams.set(
+    "material",
+    normaliseMaterial(opts.input.material, opts.input.productSlug)
+  );
   if (opts.input.customerId)
     u.searchParams.set("customer_id", opts.input.customerId);
   // Tag orientation — kept as informative metadata for the production

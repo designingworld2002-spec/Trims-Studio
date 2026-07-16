@@ -56,13 +56,15 @@ installFabricTextareaFix();
   }
 
   // ── Material ────────────────────────────────────────────────────────────
-  // An explicit `?material=` wins; otherwise infer it from the product handle
-  // (cotton-printed-labels → Cotton, …), falling back to Woven. Washcare /
-  // size labels don't imply a material, so they get the setup modal instead.
+  // First-match-wins chain: an explicit `?material=` wins when it carries a
+  // real material hint; otherwise (missing, empty, or malformed) we fall
+  // THROUGH to the product handle (cotton-printed-labels → Cotton, …), and
+  // only default to Woven when nothing matches. Washcare / size labels don't
+  // imply a material, so they get the setup modal instead.
   const materialParam = new URLSearchParams(window.location.search).get(
     "material"
   );
-  s.setMaterial(normaliseMaterial(materialParam ?? productConfig.handle));
+  s.setMaterial(normaliseMaterial(materialParam, productConfig.handle));
 
   if (
     !materialParam &&
