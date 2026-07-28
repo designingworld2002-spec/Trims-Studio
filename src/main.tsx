@@ -6,6 +6,7 @@ import { useCanvasStore } from "./store/canvasStore";
 import { readUrlConfig } from "./lib/urlParams";
 import { getProductConfig } from "./config/productConfig";
 import { installFabricTextareaFix } from "./lib/fabricTextareaFix";
+import { installFabricControlDefaults } from "./lib/fabricControlDefaults";
 import { normaliseMaterial } from "./lib/pricing";
 import "./index.css";
 
@@ -15,6 +16,10 @@ const MATERIAL_SETUP_HANDLES = ["washcare-labels", "size-labels"];
 // Pin fabric's hidden IText textarea to the viewport corner so the browser
 // never auto-scrolls when text editing begins under our CSS-scaled canvas.
 installFabricTextareaFix();
+
+// High-contrast selection handles so the resize controls (corners/borders)
+// stay visible on ANY canvas background colour.
+installFabricControlDefaults();
 
 /* Seed the store from URL params BEFORE React mounts.
  *
