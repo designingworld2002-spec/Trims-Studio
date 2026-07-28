@@ -3,11 +3,8 @@ import { Cloud, Eye, HelpCircle, Redo2, Undo2 } from "lucide-react";
 const ICON_STROKE = 1.6;
 import { useCanvasStore } from "@/store/canvasStore";
 import { history } from "@/lib/historyAccessor";
-import { calculateBasePrice, formatPrice } from "@/lib/pricing";
+import { calculateBasePrice, formatPrice, minQtyFor } from "@/lib/pricing";
 import { StudioLogo } from "./StudioLogo";
-
-/** Every Studio quote is shown against the 500-unit MOQ. */
-const QUOTE_QTY = 500;
 
 export function TopBar() {
   const productTitle = useCanvasStore((s) => s.productTitle);
@@ -32,12 +29,14 @@ export function TopBar() {
   // Live base quote — recomputes whenever the canvas is resized or the
   // material changes. Mirrors the finalize page's formula (incl. the
   // two-sided ×1.5), minus the finishing add-ons chosen at checkout.
-  // Hangtags mirror the finalize page's flat placeholder (qty × 1).
+  // Hangtags use the finalize page's universal tiered formula, quoted at
+  // their 1000 MOQ (labels/patches quote at 500).
+  const quoteQty = minQtyFor(productHandle);
   const livePrice = calculateBasePrice(
     lengthMm,
     widthMm,
     material,
-    QUOTE_QTY,
+    quoteQty,
     { hasBackPanel: hasBackSide, productHandle }
   );
 
@@ -74,7 +73,7 @@ export function TopBar() {
           <span className="font-semibold text-vp-ink/80">
             Rs. {formatPrice(livePrice)}
           </span>{" "}
-          / {QUOTE_QTY} units
+          / {quoteQty} units
         </div>
       </div>
 

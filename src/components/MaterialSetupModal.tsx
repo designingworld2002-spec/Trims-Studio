@@ -6,11 +6,9 @@ import {
   MATERIAL_LABELS,
   calculateBasePrice,
   formatPrice,
+  minQtyFor,
   type Material,
 } from "@/lib/pricing";
-
-/** Every quote in the Studio is shown against the 500-unit MOQ. */
-const QUOTE_QTY = 500;
 
 interface SizeOption {
   /** Pill label — the anchored Width (standard tape width). */
@@ -101,11 +99,12 @@ export function MaterialSetupModal() {
 
   const size = sizeOptions[Math.min(sizeIndex, sizeOptions.length - 1)];
   // Length / Width map 1:1 onto the pricing engine's (lengthMm, widthMm).
+  const quoteQty = minQtyFor(productConfig.handle);
   const price = calculateBasePrice(
     size.lengthMm,
     size.widthMm,
     material,
-    QUOTE_QTY,
+    quoteQty,
     { productHandle: productConfig.handle }
   );
 
@@ -216,7 +215,7 @@ export function MaterialSetupModal() {
             <span className="text-[16px] font-bold text-vp-ink tabular-nums">
               Rs. {formatPrice(price)}{" "}
               <span className="text-[12px] font-medium text-vp-muted">
-                / {QUOTE_QTY} units
+                / {quoteQty} units
               </span>
             </span>
           </div>

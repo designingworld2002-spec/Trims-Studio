@@ -91,6 +91,32 @@ function materialRate(material: Material, qty: number): number {
 }
 
 /**
+ * Per-tag rate for a HANGTAG at a given total quantity. Tiered by qty:
+ *   ≥8000 → 0.30 · 6000–7999 → 0.35 · 3000–5999 → 0.55 · <3000 → 0.70
+ * The finishing add-ons (Thickness/Coating/UV/Thread) are already baked into
+ * this universal rate, so they add no extra cost. Below the 1000 MOQ we still
+ * return the lowest tier so a quote never breaks; ordering is gated elsewhere.
+ */
+function hangtagRate(qty: number): number {
+  if (qty >= 8000) return 0.3;
+  if (qty >= 6000) return 0.35;
+  if (qty >= 3000) return 0.55;
+  return 0.7;
+}
+
+/** Minimum order quantity: Hangtags 1000, Labels & Patches 500. */
+export const LABEL_MOQ = 500;
+export const HANGTAG_MOQ = 1000;
+
+/**
+ * Resolve the MOQ for a product from its handle — hangtags require 1000, every
+ * other product 500. Mirrors the finalize page's `MIN_QTY` logic.
+ */
+export function minQtyFor(productHandle?: string | null): number {
+  return productHandle && /hang/i.test(productHandle) ? HANGTAG_MOQ : LABEL_MOQ;
+}
+
+/**
  * Base price for a whole run of `qty` labels, in rupees (unrounded).
  *
  * @param lengthMm  Long edge (mm)
@@ -101,6 +127,8 @@ function materialRate(material: Material, qty: number): number {
  * @param opts.hasBackPanel   Two-sided design → ×1.5
  * @param opts.productHandle  Product handle — hang-tags bypass the material
  *                            math entirely (see below)
+ * @param opts.thickness      Hangtag thickness — "1200 gsm" adds +75% (×1.75);
+ *                            "600 gsm" is the base. Ignored for non-hangtags.
  */
 export function calculateBasePrice(
   lengthMm: number,
@@ -111,6 +139,7 @@ export function calculateBasePrice(
     quality?: Quality;
     hasBackPanel?: boolean;
     productHandle?: string | null;
+    thickness?: string | null;
   } = {}
 ): number {
   const L = Number(lengthMm);
@@ -120,13 +149,17 @@ export function calculateBasePrice(
     return 0;
   }
 
-  // ── Hangtags: PLACEHOLDER pricing (mirrors the Liquid dummy) ────────────
-  // The finalize page prices hangtags as a flat `qty × 1` and returns EARLY
-  // — no style, quality, or back-panel modifiers. Mirror that exactly so the
-  // Studio quote matches until the client supplies the real hangtag formula.
+  // ── Hangtags: universal manufacturing formula (mirrors the finalize page) ─
+  // Per-tag base = ((L × W) / 645) × a tiered rate, then × qty, +50% for a
+  // two-sided design, and +75% for 1200 gsm thickness. The 600 gsm base and the
+  // other add-ons (Coating/UV/Thread) are already included — no quality tier.
   // Detection mirrors Liquid's `/hang/i.test(paramProduct)`.
   if (opts.productHandle && /hang/i.test(opts.productHandle)) {
-    return q * 1;
+    const areaFactor = (L * W) / 645;
+    let hangtagTotal = areaFactor * hangtagRate(q) * q;
+    if (opts.hasBackPanel) hangtagTotal *= 1.5;
+    if (opts.thickness === "1200 gsm") hangtagTotal *= 1.75;
+    return hangtagTotal;
   }
 
   const areaFactor = (L * W) / 645;
