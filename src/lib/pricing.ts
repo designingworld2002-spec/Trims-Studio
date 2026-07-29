@@ -151,14 +151,18 @@ export function calculateBasePrice(
 
   // ── Hangtags: universal manufacturing formula (mirrors the finalize page) ─
   // Per-tag base = ((L × W) / 645) × a tiered rate, then × qty, +50% for a
-  // two-sided design, and +75% for 1200 gsm thickness. The 600 gsm base and the
-  // other add-ons (Coating/UV/Thread) are already included — no quality tier.
-  // Detection mirrors Liquid's `/hang/i.test(paramProduct)`.
+  // two-sided design, and a thickness modifier (600 gsm base · 300 gsm −30% ·
+  // 1200 gsm +75%). The other add-ons (Coating/UV/Thread) are already included
+  // — no quality tier. Detection mirrors Liquid's `/hang/i.test(paramProduct)`.
   if (opts.productHandle && /hang/i.test(opts.productHandle)) {
     const areaFactor = (L * W) / 645;
     let hangtagTotal = areaFactor * hangtagRate(q) * q;
     if (opts.hasBackPanel) hangtagTotal *= 1.5;
-    if (opts.thickness === "1200 gsm") hangtagTotal *= 1.75;
+    if (opts.thickness === "300 gsm") {
+      hangtagTotal *= 0.7;
+    } else if (opts.thickness === "1200 gsm") {
+      hangtagTotal *= 1.75;
+    }
     return hangtagTotal;
   }
 
