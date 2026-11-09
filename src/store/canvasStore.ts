@@ -503,6 +503,22 @@ export interface CanvasStoreState {
    */
   openTool: (t: NonNullable<ToolKey>) => void;
 
+  /**
+   * Monotonic nonce bumped whenever something requests the Product
+   * panel's shape picker be scrolled into view / focused. The
+   * ShapeSelection component watches this and calls `scrollIntoView`.
+   * A nonce (rather than a boolean) guarantees repeat requests re-fire
+   * even when the Product panel is already open.
+   */
+  shapeFocusNonce: number;
+  /**
+   * Open the Product panel (drawer + Product tab) AND signal the shape
+   * picker to scroll into view, in a single atomic update. Wired to the
+   * mobile "Change shape" button so a hangtag user can jump straight to
+   * the die-cut silhouette gallery.
+   */
+  openShapePicker: () => void;
+
   zoom: number; // 1 = fit
   setZoom: (z: number) => void;
 
@@ -1006,6 +1022,16 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
     set((s) => ({ activeTool: s.activeTool === t ? null : t })),
   openTool: (t) =>
     set((s) => (s.activeTool === t ? s : { activeTool: t })),
+
+  shapeFocusNonce: 0,
+  openShapePicker: () =>
+    set((s) => ({
+      // Open the drawer on the Product tab and signal the shape picker
+      // to scroll into view — one atomic update so the panel mount + the
+      // scroll request land together.
+      activeTool: "product",
+      shapeFocusNonce: s.shapeFocusNonce + 1,
+    })),
 
   zoom: 1,
   setZoom: (z) => set({ zoom: Math.min(Math.max(z, 0.1), 5) }),

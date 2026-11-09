@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Minus, Plus, Settings, Trash2 } from "lucide-react";
+import { Eye, EyeOff, Minus, Plus, Settings, Square, Trash2 } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { SmartPopover } from "./SmartPopover";
 import { designOps } from "./Workspace";
@@ -8,6 +8,10 @@ export function BottomBar() {
   const setZoom = useCanvasStore((s) => s.setZoom);
   const showGuides = useCanvasStore((s) => s.showGuides);
   const setShowGuides = useCanvasStore((s) => s.setShowGuides);
+  // Hang tags are the only product with a user-selectable die-cut
+  // silhouette, so the mobile "Change shape" shortcut is gated to them.
+  const isHangTag = useCanvasStore((s) => s.productConfig.handle === "hang-tags");
+  const openShapePicker = useCanvasStore((s) => s.openShapePicker);
 
   const stepDown = () => setZoom(Math.max(0.25, +(zoom - 0.1).toFixed(2)));
   const stepUp = () => setZoom(Math.min(4, +(zoom + 0.1).toFixed(2)));
@@ -24,14 +28,35 @@ export function BottomBar() {
   };
 
   return (
-    <div data-tour="zoom" className="absolute top-1/2 -translate-y-1/2 right-4 bg-white rounded-full shadow-vp-pop border border-vp-border w-10 flex flex-col items-center py-1 gap-0.5 z-10">
-      <button
-        aria-label="Zoom in"
-        onClick={stepUp}
-        className="w-8 h-8 rounded-full hover:bg-vp-rail flex items-center justify-center"
+    <div className="absolute top-1/2 -translate-y-1/2 right-4 z-10 flex flex-col items-center gap-2">
+      {/* Change Shape — MOBILE ONLY, HANGTAGS ONLY. Sits directly above
+          the zoom block and jumps straight to the die-cut silhouette
+          gallery in the Product panel. Styled to match the zoom pill
+          (round, white, soft shadow, bordered). */}
+      {isHangTag && (
+        <button
+          type="button"
+          aria-label="Change tag shape"
+          title="Change shape"
+          onClick={openShapePicker}
+          className="md:hidden w-10 h-10 rounded-full bg-white shadow-vp-pop border border-vp-border flex items-center justify-center text-vp-ink hover:bg-vp-rail transition-colors"
+        >
+          <Square className="w-4 h-4" strokeWidth={1.8} />
+        </button>
+      )}
+
+      {/* Zoom + canvas settings pill. */}
+      <div
+        data-tour="zoom"
+        className="bg-white rounded-full shadow-vp-pop border border-vp-border w-10 flex flex-col items-center py-1 gap-0.5"
       >
-        <Plus className="w-4 h-4" />
-      </button>
+        <button
+          aria-label="Zoom in"
+          onClick={stepUp}
+          className="w-8 h-8 rounded-full hover:bg-vp-rail flex items-center justify-center"
+        >
+          <Plus className="w-4 h-4" />
+        </button>
       <button
         onClick={reset}
         className="min-w-8 px-1 h-8 rounded-full hover:bg-vp-rail text-[10px] font-medium leading-none"
@@ -85,7 +110,8 @@ export function BottomBar() {
             Clear canvas
           </button>
         </div>
-      </SmartPopover>
+        </SmartPopover>
+      </div>
     </div>
   );
 }

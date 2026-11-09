@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Link2, Link2Off } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import type { CanvasShape } from "@/store/canvasStore";
@@ -401,6 +402,31 @@ function ShapeSelection() {
   const lengthMm = useCanvasStore((s) => s.canvasLengthMm);
   const widthMm = useCanvasStore((s) => s.canvasWidthMm);
 
+  // When something (e.g. the mobile "Change shape" button) requests focus,
+  // scroll this section into view inside the drawer's scroll container and
+  // flash a brief highlight ring so the user's eye lands on the picker.
+  const shapeFocusNonce = useCanvasStore((s) => s.shapeFocusNonce);
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const [highlight, setHighlight] = useState(false);
+  useEffect(() => {
+    // Skip the initial mount (nonce 0 is the "never requested" baseline).
+    if (shapeFocusNonce === 0) return;
+    const el = sectionRef.current;
+    if (!el) return;
+    // Defer to the next frame: the drawer opens + this panel mounts in
+    // the same tick that bumped the nonce, so wait for layout to settle
+    // before scrolling.
+    const raf = requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      setHighlight(true);
+    });
+    const t = window.setTimeout(() => setHighlight(false), 1400);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(t);
+    };
+  }, [shapeFocusNonce]);
+
   // Single-shape products (e.g. woven labels) hide the picker entirely —
   // the choice is fixed by the manufacturing process.
   if (allowedShapes.length <= 1) return null;
@@ -419,7 +445,13 @@ function ShapeSelection() {
     shape === "round-corners" || shape === "cut-corners";
 
   return (
-    <div>
+    <div
+      ref={sectionRef}
+      className={[
+        "scroll-mt-4 rounded-xl transition-shadow duration-300",
+        highlight ? "ring-2 ring-vp-accent/70 ring-offset-2 ring-offset-white" : "ring-0",
+      ].join(" ")}
+    >
       <label className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 mb-2.5">
         Shape
       </label>
