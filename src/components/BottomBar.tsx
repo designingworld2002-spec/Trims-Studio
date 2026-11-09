@@ -12,6 +12,11 @@ export function BottomBar() {
   // silhouette, so the mobile "Change shape" shortcut is gated to them.
   const isHangTag = useCanvasStore((s) => s.productConfig.handle === "hang-tags");
   const openShapePicker = useCanvasStore((s) => s.openShapePicker);
+  // Mobile stacking: the controls ride just above whichever bottom bar is
+  // showing (selection bar when an object is selected, else the nav rail),
+  // and step out of the way entirely while a bottom sheet is open.
+  const selected = useCanvasStore((s) => s.selected);
+  const sheetOpen = useCanvasStore((s) => s.activeTool !== null);
 
   const stepDown = () => setZoom(Math.max(0.25, +(zoom - 0.1).toFixed(2)));
   const stepUp = () => setZoom(Math.min(4, +(zoom + 0.1).toFixed(2)));
@@ -28,7 +33,22 @@ export function BottomBar() {
   };
 
   return (
-    <div className="absolute top-1/2 -translate-y-1/2 right-4 z-10 flex flex-col items-center gap-2">
+    <div
+      className={[
+        "absolute z-10 flex flex-col items-center gap-1.5 md:gap-2",
+        // Mobile: pinned to the right edge, sitting just above the active
+        // bottom bar — the nav rail (~75px) when idle, or the contextual
+        // selection bar stacked on the nav (~140px) when an object is
+        // selected. Hidden while a bottom sheet covers the lower half.
+        "right-2 top-auto translate-y-0",
+        selected
+          ? "bottom-[calc(150px_+_env(safe-area-inset-bottom))]"
+          : "bottom-[calc(86px_+_env(safe-area-inset-bottom))]",
+        sheetOpen ? "max-md:hidden" : "",
+        // Desktop: vertically centred on the right edge (unchanged).
+        "md:right-4 md:top-1/2 md:bottom-auto md:-translate-y-1/2",
+      ].join(" ")}
+    >
       {/* Change Shape — MOBILE ONLY, HANGTAGS ONLY. Sits directly above
           the zoom block and jumps straight to the die-cut silhouette
           gallery in the Product panel. Styled to match the zoom pill
@@ -39,9 +59,9 @@ export function BottomBar() {
           aria-label="Change tag shape"
           title="Change shape"
           onClick={openShapePicker}
-          className="md:hidden w-10 h-10 rounded-full bg-white shadow-vp-pop border border-vp-border flex items-center justify-center text-vp-ink hover:bg-vp-rail transition-colors"
+          className="md:hidden w-9 h-9 rounded-full bg-white shadow-vp-pop border border-vp-border flex items-center justify-center text-vp-ink hover:bg-vp-rail transition-colors"
         >
-          <Square className="w-4 h-4" strokeWidth={1.8} />
+          <Square className="w-[18px] h-[18px]" strokeWidth={1.8} />
         </button>
       )}
 

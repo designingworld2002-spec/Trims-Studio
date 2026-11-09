@@ -4,6 +4,9 @@ import { LeftToolRail } from "./components/LeftToolRail";
 import { SidePanel } from "./components/SidePanel";
 import { Workspace } from "./components/Workspace";
 import { BottomBar } from "./components/BottomBar";
+import { MobileBottomNav } from "./components/mobile/MobileBottomNav";
+import { MobileSelectionBar } from "./components/mobile/MobileSelectionBar";
+import { MobileBottomSheet } from "./components/mobile/MobileBottomSheet";
 import { PreviewModal } from "./components/PreviewModal";
 import { UploadCenterModal } from "./components/UploadCenterModal";
 import { BackChooserModal } from "./components/BackChooserModal";
@@ -187,6 +190,13 @@ export default function App() {
           <BottomBar />
         </main>
       </div>
+
+      {/* Mobile-only Vistaprint-style chrome (all md:hidden + fixed). The
+          desktop equivalents live inside the flex shell above. */}
+      <MobileSelectionBar />
+      <MobileBottomNav />
+      <MobileBottomSheet />
+
       <PreviewModal />
       <UploadCenterModal />
       <BackChooserModal />

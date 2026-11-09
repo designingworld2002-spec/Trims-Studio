@@ -53,6 +53,16 @@ button {
 }
 
 
+/* Fully hide scrollbars on horizontal mobile rails while keeping scroll
+   functionality (Vistaprint-style bottom nav + contextual action bar). */
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Range slider styling */
 input[type="range"].vp-range {
   -webkit-appearance: none;

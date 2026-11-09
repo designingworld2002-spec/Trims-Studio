@@ -1312,6 +1312,10 @@ export function Workspace() {
   const zoom = useCanvasStore((s) => s.zoom);
   const setHistoryFlags = useCanvasStore((s) => s.setHistoryFlags);
   const previewMode = useCanvasStore((s) => s.previewMode);
+  // Mobile layout awareness — drives the dynamic bottom inset so the open
+  // bottom sheet / nav / selection bar never hides the live design.
+  const activeTool = useCanvasStore((s) => s.activeTool);
+  const selected = useCanvasStore((s) => s.selected);
   const productConfig = useCanvasStore((s) => s.productConfig);
   const canvasShape = useCanvasStore((s) => s.canvasShape);
   const shapeModifiers = useCanvasStore((s) => s.shapeModifiers);
@@ -1420,6 +1424,17 @@ export function Workspace() {
   useSmartGuides(useCanvasStore((s) => s.canvas));
 
   const [fitScale, setFitScale] = useState(1);
+
+  // Bottom inset (CSS px) reserved on MOBILE so the canvas re-centres into
+  // the region still visible above whatever chrome is showing — the open
+  // bottom sheet, the contextual selection bar, or just the nav rail. On
+  // desktop this stays 0 (the floating controls/panels don't overlap the
+  // stage). Applied as the stage container's padding-bottom AND subtracted
+  // from the fit computation, so the design both shrinks and shifts up to
+  // stay fully on screen (mirrors Vistaprint's panel-open behaviour).
+  const [bottomReserve, setBottomReserve] = useState(0);
+  const bottomReserveRef = useRef(0);
+  bottomReserveRef.current = bottomReserve;
 
   // Position of floating action menu in CSS pixels relative to the stage.
   const [actionMenuPos, setActionMenuPos] = useState<{
@@ -2235,22 +2250,54 @@ export function Workspace() {
   // zooming naturally radiates from the canvas center without any
   // browser scrollbar shifting things around.)
 
-  /* ----- Fit-to-90% via ResizeObserver on the container ----- */
+  /* ----- Fit-to-90% of the VISIBLE work area ----- */
+  // Fits 90% of the smaller axis, but the height axis first has the mobile
+  // bottom inset carved off so the design is measured against the space
+  // actually visible above the sheet / bars, not the full container.
+  const recomputeFit = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const availW = rect.width;
+    const availH = Math.max(1, rect.height - bottomReserveRef.current);
+    const target = Math.min(availW, availH) * 0.9;
+    const next = target / VIRTUAL_SIZE;
+    setFitScale(next > 0 ? next : 1);
+  }, []);
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const compute = () => {
-      const rect = el.getBoundingClientRect();
-      // Use 90% of the smaller axis so the canvas always fits comfortably.
-      const target = Math.min(rect.width, rect.height) * 0.9;
-      const next = target / VIRTUAL_SIZE;
-      setFitScale(next > 0 ? next : 1);
-    };
-    compute();
-    const ro = new ResizeObserver(compute);
+    recomputeFit();
+    const ro = new ResizeObserver(recomputeFit);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [recomputeFit]);
+
+  // Recompute the reserved mobile inset whenever the chrome state changes.
+  // The sheet (55vh) dominates; otherwise reserve the nav (+ selection bar
+  // when an object is selected) so the design clears those bars. Width
+  // breakpoint mirrors Tailwind's `md` (768px).
+  useEffect(() => {
+    const compute = () => {
+      let r = 0;
+      if (!previewMode && window.innerWidth < 768) {
+        if (activeTool) r = Math.min(window.innerHeight * 0.55, 560) + 12;
+        else if (selected) r = 155;
+        else r = 90;
+      }
+      setBottomReserve(r);
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    return () => window.removeEventListener("resize", compute);
+  }, [activeTool, selected, previewMode]);
+
+  // Padding change doesn't resize the observed container's border box, so
+  // the ResizeObserver won't fire — recompute the fit explicitly.
+  useEffect(() => {
+    recomputeFit();
+  }, [bottomReserve, recomputeFit]);
 
   const totalScale = fitScale * zoom;
   const stagePxSize = VIRTUAL_SIZE * totalScale;
@@ -2278,7 +2325,8 @@ export function Workspace() {
      */
     <div
       ref={containerRef}
-      className="relative w-full h-full flex items-center justify-center overflow-hidden"
+      className="relative w-full h-full flex items-center justify-center overflow-hidden transition-[padding] duration-300 ease-out"
+      style={{ paddingBottom: bottomReserve || undefined }}
     >
       <div
         ref={stageRef}

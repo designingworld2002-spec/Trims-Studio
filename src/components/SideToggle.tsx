@@ -23,6 +23,10 @@ export function SideToggle() {
   const setConfirmDeleteBackOpen = useCanvasStore(
     (s) => s.setConfirmDeleteBackOpen
   );
+  // Mobile: ride just above the active bottom bar and clear out while a
+  // bottom sheet is open (mirrors the floating zoom controls).
+  const selected = useCanvasStore((s) => s.selected);
+  const sheetOpen = useCanvasStore((s) => s.activeTool !== null);
 
   if (!supportsBack || previewMode) return null;
 
@@ -45,7 +49,19 @@ export function SideToggle() {
 
   return (
     <div
-      className="absolute bottom-4 right-4 z-20 flex items-center gap-2"
+      className={[
+        "absolute z-20 flex items-center gap-2",
+        // Mobile: centred just above the active bottom bar (selection bar
+        // when something is selected, else the nav rail); hidden while a
+        // bottom sheet is open.
+        "left-1/2 -translate-x-1/2 right-auto",
+        selected
+          ? "bottom-[calc(150px_+_env(safe-area-inset-bottom))]"
+          : "bottom-[calc(86px_+_env(safe-area-inset-bottom))]",
+        sheetOpen ? "max-md:hidden" : "",
+        // Desktop: bottom-right of the workspace (unchanged).
+        "md:bottom-4 md:right-4 md:left-auto md:translate-x-0",
+      ].join(" ")}
       aria-label="Switch side"
     >
       {/* Segmented pill */}

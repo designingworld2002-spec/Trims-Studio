@@ -29,13 +29,14 @@ export function SidePanel() {
   return (
     <aside
       className={[
-        "shrink-0 bg-white flex flex-col",
-        // Mobile: full-width sheet pinned above the rail.
-        "w-full max-h-[55vh] border-t border-gray-200",
+        "shrink-0 bg-white flex-col",
+        // Mobile is handled by the fixed <MobileBottomSheet/>, so this
+        // in-flow panel is DESKTOP ONLY.
+        "hidden md:flex",
         // Desktop: a FLOATING card — generous margin so it sits clearly
         // detached from both the tool rail and the canvas workspace.
         "md:w-[320px] md:max-h-none md:h-[calc(100%-2rem)] md:my-4 md:ml-4",
-        "md:border-t-0 md:border md:border-gray-200/80 md:rounded-2xl md:shadow-lg md:shadow-slate-900/[0.07]",
+        "md:border md:border-gray-200/80 md:rounded-2xl md:shadow-lg md:shadow-slate-900/[0.07]",
         "md:overflow-hidden",
       ].join(" ")}
       aria-label={`${titles[activeTool]} panel`}

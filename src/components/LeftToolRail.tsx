@@ -33,15 +33,15 @@ export function LeftToolRail() {
       aria-label="Tools"
       data-tour="sidebar"
       className={[
-        "shrink-0 bg-white flex",
-        // Mobile: horizontal bottom rail — keep the hairline so it
-        // separates from the canvas.
-        "w-full h-[64px] border-t border-gray-100 flex-row items-center justify-around overflow-x-auto px-1",
+        "shrink-0 bg-white",
+        // Mobile is handled by the fixed <MobileBottomNav/> (Vistaprint
+        // bottom rail), so this vertical rail is DESKTOP ONLY.
+        "hidden md:flex",
         // Desktop: clean white vertical column, NO right border. The
         // canvas already sits on a soft tinted background which gives
         // the natural separation, and dropping the border matches the
         // reference's flat look.
-        "md:w-[80px] md:h-auto md:border-t-0 md:border-r-0 md:flex-col md:items-stretch md:justify-start md:py-3 md:px-0 md:gap-1.5 md:overflow-visible",
+        "md:w-[80px] md:h-auto md:flex-col md:items-stretch md:justify-start md:py-3 md:px-0 md:gap-1.5 md:overflow-visible",
       ].join(" ")}
     >
       {visibleTools.map((t) => {

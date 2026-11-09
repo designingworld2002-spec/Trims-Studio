@@ -40,7 +40,7 @@ export function TopContextualToolbar() {
     selected.type === "image" && (selected.isLowRes || selected.isBlurry);
 
   return (
-    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2 max-w-[calc(100vw-24px)]">
+    <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 hidden md:flex flex-col items-center gap-2 max-w-[calc(100vw-24px)]">{/* Desktop only — mobile uses the bottom MobileSelectionBar. */}
       <div
         role="toolbar"
         aria-label="Element toolbar"
