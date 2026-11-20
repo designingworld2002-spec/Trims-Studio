@@ -96,6 +96,70 @@ export interface ProductConfig {
    * picker are available.
    */
   backgroundColors?: string[];
+
+  /* ---------------- Hard dimension constraints ------------------ */
+  /**
+   * Immutable LONG edge in mm. When set, NOTHING can move the length
+   * away from this value — manual input, a preset click, an
+   * aspect-ratio recalculation, a template URL, or a restored design.
+   * Enforced centrally by `constrainDimensions` in the store, so every
+   * write path (`setCanvasSize` / `updateLength` / `updateWidth` /
+   * `loadDesign`) is covered.
+   *
+   * Used by printed ribbons, which are cut from a fixed 150 mm pitch.
+   */
+  fixedLengthMm?: number;
+  /**
+   * Inclusive clamp for the SHORT edge in mm (the `width` field). The
+   * Product panel mirrors these onto the numeric input's min/max, and
+   * the store clamps every write so an out-of-range value can never
+   * land in state.
+   */
+  widthRangeMm?: { min: number; max: number };
+  /**
+   * Orientation is a physical property of the product and cannot be
+   * flipped. Hides the Landscape / Portrait toggle in the Product panel
+   * AND makes `toggleOrientation` a no-op (so no keyboard shortcut or
+   * future call site can rotate a 150 mm ribbon into a 150 mm vertical
+   * strip).
+   */
+  orientationLocked?: boolean;
+  /**
+   * Disable aspect-ratio LINKING. The chain button is hidden and the
+   * store pins `isAspectRatioLocked` to false, so changing the short
+   * edge never tries to rescale a fixed long edge.
+   */
+  aspectRatioLinkDisabled?: boolean;
+  /**
+   * Fit the stage to the design's BLEED box rather than to the fixed
+   * 2000 px virtual square. The default (square) fit is right for
+   * near-square products, but an extreme aspect ratio (a 150 × 10 mm
+   * ribbon occupies 7.5 % of the square's height) renders unusably
+   * small. Opt-in per product so existing products are untouched.
+   */
+  fitStageToBleed?: boolean;
+  /**
+   * Scale foreground user objects UNIFORMLY when the canvas is resized,
+   * instead of the default per-axis rescale.
+   *
+   * The default dim-change rescale multiplies each object's scaleX by the
+   * length ratio and scaleY by the width ratio — correct for products
+   * whose aspect ratio can genuinely change, but wrong for a printed
+   * ribbon, where the length is pinned at 150 mm and only the HEIGHT
+   * moves: a per-axis pass would leave scaleX=1, scaleY=newH/oldH and
+   * vertically stretch every logo and letter. With this flag the
+   * Workspace applies a single clamped factor to scaleX, scaleY AND the
+   * object's offset from centre, so artwork keeps its proportions and
+   * re-centres inside the new ribbon bounds.
+   */
+  preserveAspectOnResize?: boolean;
+  /**
+   * Material to assume when neither `?material=` nor the handle carries
+   * a material hint. Without it the chain in `main.tsx` falls back to
+   * "Woven" — wrong for a printed product whose handle happens not to
+   * name its fabric (e.g. `printed-ribbons`).
+   */
+  defaultMaterial?: Material;
 }
 
 const ALL_TOOLS: NonNullable<ToolKey>[] = [
@@ -205,6 +269,55 @@ export const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
   // (printed labels are guillotine-cut, not die-cut). A single shared
   // config factory keeps the three materials consistent.
   // -------------------------------------------------------------------
+  // -------------------------------------------------------------------
+  // Printed Ribbons — a printed satin ribbon strip cut from a fixed
+  // 150 mm pitch. The LENGTH is a manufacturing constant (150 mm); only
+  // the tape HEIGHT varies, across the stocked 10–50 mm range. Both
+  // constraints are enforced in the store (see `constrainDimensions`),
+  // not just in the UI, so no code path can produce an unmakeable size.
+  //
+  // Ribbons carry none of the hang-tag affordances: no die-cut shape
+  // selector (a single allowed shape hides the picker, which also
+  // removes the mobile "Change shape" shortcut), no hole punch, and a
+  // single printed face.
+  // -------------------------------------------------------------------
+  "printed-ribbons": {
+    handle: "printed-ribbons",
+    label: "Printed Ribbons",
+    allowedTools: ALL_TOOLS,
+    // Landscape strip: 150 mm long edge × 25 mm tape height.
+    defaultDimensions: { lengthMm: 150, widthMm: 25 },
+    visualGuides: NO_HOLE,
+    canvasClipShape: "rectangle",
+    // Ribbon is cut straight off the roll — no die-cut silhouettes.
+    allowedShapes: ["rectangle"],
+    // Single printed face.
+    supportsBackSide: false,
+    textureOverlayCss: null,
+    textureOverlayOpacity: 0,
+    textureOverlayBlendMode: "multiply",
+    // Hard constraints — see the ProductConfig docs above.
+    fixedLengthMm: 150,
+    widthRangeMm: { min: 10, max: 50 },
+    orientationLocked: true,
+    aspectRatioLinkDisabled: true,
+    fitStageToBleed: true,
+    // Height-only product: scale artwork uniformly so changing the tape
+    // height never distorts a design (see ProductConfig docs above).
+    preserveAspectOnResize: true,
+    // Printed satin tape — never price ribbons on the woven formula.
+    defaultMaterial: "Satin",
+    // Stocked tape heights. `lengthMm` is pinned on every tier so a
+    // preset click can never alter the fixed 150 mm length.
+    presetSizes: [
+      { label: "Slim", widthMm: 10, lengthMm: 150 },
+      { label: "Narrow", widthMm: 15, lengthMm: 150 },
+      { label: "Standard", widthMm: 25, lengthMm: 150 },
+      { label: "Wide", widthMm: 38, lengthMm: 150 },
+      { label: "Extra wide", widthMm: 50, lengthMm: 150 },
+    ],
+  },
+
   ...printedLabelConfigs(),
 };
 
@@ -293,6 +406,13 @@ export function getProductConfig(
   if (norm.includes("washcare") || norm.includes("wash-care") || norm.includes("care"))
     return PRODUCT_CONFIGS["washcare-labels"];
   if (norm.includes("size")) return PRODUCT_CONFIGS["size-labels"];
+
+  // Printed ribbons — MUST be matched before the generic "printed"
+  // branch below, otherwise "printed-ribbons" (which contains
+  // "printed") would resolve to cotton printed labels. Catches
+  // `printed-ribbons`, `printed-ribbon`, `ribbons`, `ribbon`, plus
+  // free-text spellings like "Satin Printed Ribbon".
+  if (norm.includes("ribbon")) return PRODUCT_CONFIGS["printed-ribbons"];
 
   // Printed labels — match the material keyword. Checked BEFORE the
   // generic "woven"/"label" fallback so "cotton printed labels" etc.

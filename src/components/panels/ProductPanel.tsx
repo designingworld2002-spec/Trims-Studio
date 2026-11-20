@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link2, Link2Off } from "lucide-react";
+import { Link2, Link2Off, Lock } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import type { CanvasShape } from "@/store/canvasStore";
 import { RecentDesignsSection } from "./RecentDesignsSection";
@@ -35,14 +35,30 @@ export function ProductPanel() {
   const toggleOrientation = useCanvasStore((s) => s.toggleOrientation);
   const productHandle = useCanvasStore((s) => s.productConfig.handle);
   const presetSizes = useCanvasStore((s) => s.productConfig.presetSizes);
+  const productLabel = useCanvasStore((s) => s.productConfig.label);
   const fixedSizesOnly = useCanvasStore(
     (s) => s.productConfig.fixedSizesOnly ?? false
+  );
+  // Hard dimension constraints (printed ribbons: length pinned at
+  // 150 mm, height clamped to 10-50 mm). All of these are enforced in
+  // the store as well - the UI only reflects them.
+  const fixedLengthMm = useCanvasStore((s) => s.productConfig.fixedLengthMm);
+  const widthRangeMm = useCanvasStore((s) => s.productConfig.widthRangeMm);
+  const aspectLinkDisabled = useCanvasStore(
+    (s) => s.productConfig.aspectRatioLinkDisabled ?? false
+  );
+  const orientationLocked = useCanvasStore(
+    (s) => s.productConfig.orientationLocked ?? false
   );
   const mode = useCanvasStore((s) => s.mode);
 
   const isHorizontal = lengthMm >= widthMm;
+  const lengthIsFixed = typeof fixedLengthMm === "number";
   // Template mode hides the unlink button entirely; upload mode shows it.
-  const showLinkToggle = mode !== "template";
+  // A product that forbids linking shows no chain at all (neither the
+  // interactive button nor the static "locked" icon) - there is nothing
+  // to link when one edge can never move.
+  const showLinkToggle = mode !== "template" && !aspectLinkDisabled;
 
   // Per-product orientation rules:
   //   - hang-tags:   removed from sidebar entirely (use the floating
@@ -50,7 +66,10 @@ export function ProductPanel() {
   //   - woven-labels: shown but DISABLED (looms can't switch orientation
   //                  on the fly — the orientation is set by the loom).
   //   - anything else: shown and interactive.
-  const showOrientation = productHandle !== "hang-tags";
+  //   - printed-ribbons: hidden entirely - a ribbon is always a
+  //                  horizontal strip (orientationLocked in the config,
+  //                  and `toggleOrientation` is a no-op in the store).
+  const showOrientation = productHandle !== "hang-tags" && !orientationLocked;
   const orientationDisabled = productHandle === "woven-labels";
 
   return (
@@ -131,6 +150,10 @@ export function ProductPanel() {
               label="Length (mm)"
               value={lengthMm}
               onChange={updateLength}
+              locked={lengthIsFixed}
+              lockHint={
+                lengthIsFixed ? "Fixed at " + fixedLengthMm + " mm" : undefined
+              }
             />
             {showLinkToggle && (
               <ChainButton
@@ -138,7 +161,7 @@ export function ProductPanel() {
                 onToggle={() => setLocked(!isLocked)}
               />
             )}
-            {!showLinkToggle && (
+            {!showLinkToggle && !aspectLinkDisabled && (
               // Template mode: keep the same horizontal rhythm with a
               // spacer + a static lock-confirm icon so users see why the
               // fields are tied.
@@ -151,18 +174,34 @@ export function ProductPanel() {
               </div>
             )}
             <NumField
-              label="Width (mm)"
+              label={lengthIsFixed ? "Height (mm)" : "Width (mm)"}
               value={widthMm}
               onChange={updateWidth}
+              min={widthRangeMm?.min}
+              max={widthRangeMm?.max}
             />
           </div>
 
-          <p className="text-[11px] text-vp-muted">
-            Length is the long edge of the product, width is the short edge.
-            {isLocked
-              ? " Dimensions are linked — changing one updates the other."
-              : " Dimensions are independent."}
-          </p>
+          {lengthIsFixed ? (
+            <p className="text-[11px] text-vp-muted">
+              Length is fixed at {fixedLengthMm} mm for{" "}
+              {productLabel.toLowerCase()}.
+              {widthRangeMm
+                ? " Choose any height from " +
+                  widthRangeMm.min +
+                  " to " +
+                  widthRangeMm.max +
+                  " mm."
+                : ""}
+            </p>
+          ) : (
+            <p className="text-[11px] text-vp-muted">
+              Length is the long edge of the product, width is the short edge.
+              {isLocked
+                ? " Dimensions are linked — changing one updates the other."
+                : " Dimensions are independent."}
+            </p>
+          )}
         </>
       )}
 
@@ -178,6 +217,7 @@ export function ProductPanel() {
         lengthMm={lengthMm}
         widthMm={widthMm}
         presetSizes={presetSizes}
+        fixedLengthMm={fixedLengthMm}
         onPick={(l, w) => {
           // Use setCanvasSize directly to update BOTH axes atomically.
           // updateLength/updateWidth go through the aspect-lock logic
@@ -706,11 +746,14 @@ function SizePresets({
   lengthMm,
   widthMm,
   presetSizes,
+  fixedLengthMm,
   onPick,
 }: {
   lengthMm: number;
   widthMm: number;
   presetSizes?: { label: string; widthMm: number; lengthMm?: number }[];
+  /** Set when the product pins its long edge (ribbons: 150 mm). */
+  fixedLengthMm?: number;
   onPick: (lengthMm: number, widthMm: number) => void;
 }) {
   // Per-product tiers when supplied (e.g. woven Standard=32); otherwise
@@ -746,7 +789,9 @@ function SizePresets({
       <label className="block text-xs font-medium mb-2">
         Preset sizes
         <span className="ml-1 text-vp-muted font-normal">
-          (keeps the current ratio)
+          {fixedLengthMm != null
+            ? "(length stays " + fixedLengthMm + " mm)"
+            : "(keeps the current ratio)"}
         </span>
       </label>
       <div className="grid grid-cols-2 gap-1.5">
@@ -783,28 +828,101 @@ function NumField({
   label,
   value,
   onChange,
+  min = 10,
+  max = 300,
+  locked = false,
+  lockHint,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
+  /** Inclusive bounds mirrored from the product's constraints. */
+  min?: number;
+  max?: number;
+  /** Non-editable - a manufacturing constant (e.g. a 150 mm ribbon). */
+  locked?: boolean;
+  /** Helper note rendered under a locked field. */
+  lockHint?: string;
 }) {
+  // `draft` holds the raw in-flight text while the user is typing;
+  // `null` means "show the committed store value".
+  const [draft, setDraft] = useState<string | null>(null);
+
+  // Settle the field: clamp whatever was typed into [min, max] and push
+  // it to the store, then hand the display back to the store value.
+  // An empty / unparseable entry simply reverts.
+  const commitDraft = () => {
+    if (draft == null) return;
+    const n = Number(draft);
+    if (draft.trim() !== "" && Number.isFinite(n)) {
+      onChange(Math.min(max, Math.max(min, Math.round(n))));
+    }
+    setDraft(null);
+  };
+
   return (
     <label className="block flex-1">
       <span className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 mb-2">
         {label}
       </span>
-      <input
-        type="number"
-        min={10}
-        max={300}
-        step={1}
-        value={value}
-        onChange={(e) => {
-          const n = Number(e.target.value);
-          if (Number.isFinite(n) && n > 0) onChange(Math.round(n));
-        }}
-        className="w-full h-10 px-3.5 rounded-lg border border-vp-border text-[13px] font-medium tabular-nums focus:outline-none focus:border-vp-blue focus:ring-2 focus:ring-vp-blue/15 transition"
-      />
+      <div className="relative">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={1}
+          value={draft ?? value}
+          disabled={locked}
+          readOnly={locked}
+          aria-readonly={locked}
+          title={locked ? lockHint : undefined}
+          onChange={(e) => {
+            if (locked) return;
+            const raw = e.target.value;
+            // Keep the raw keystrokes in a local draft so an in-progress
+            // entry is never rewritten under the caret: typing "38" into
+            // a 10-50 field would otherwise clamp the intermediate "3"
+            // to 10 and leave the user fighting the input. Only values
+            // already inside the range commit live; anything else waits
+            // for blur / Enter, which clamps it.
+            setDraft(raw);
+            const n = Number(raw);
+            if (Number.isFinite(n) && n >= min && n <= max) {
+              onChange(Math.round(n));
+            }
+          }}
+          onBlur={() => {
+            if (locked) return;
+            commitDraft();
+          }}
+          onKeyDown={(e) => {
+            if (locked) return;
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitDraft();
+            } else if (e.key === "Escape") {
+              setDraft(null);
+            }
+          }}
+          className={[
+            "w-full h-10 px-3.5 rounded-lg border text-[13px] font-medium tabular-nums transition",
+            locked
+              ? "border-vp-border bg-slate-50 text-vp-muted cursor-not-allowed pr-9"
+              : "border-vp-border focus:outline-none focus:border-vp-blue focus:ring-2 focus:ring-vp-blue/15",
+          ].join(" ")}
+        />
+        {locked && (
+          <Lock
+            className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none"
+            aria-hidden
+          />
+        )}
+      </div>
+      {locked && lockHint && (
+        <span className="mt-1 block text-[10px] font-medium text-slate-400">
+          {lockHint}
+        </span>
+      )}
     </label>
   );
 }

@@ -258,6 +258,45 @@ function bleedFillFromJson(json: any): string | null {
   return null;
 }
 
+/**
+ * Clamp a (length, width) pair against the active product's HARD
+ * dimension constraints.
+ *
+ * This is the single choke point every dimension write goes through —
+ * `setCanvasSize`, `updateLength`, `updateWidth`, preset clicks, the
+ * URL seed in `main.tsx`, and `loadDesign`'s restore — so a product
+ * with a fixed length (printed ribbons: 150 mm) or a bounded short edge
+ * (ribbons: 10–50 mm) can NEVER hold an unmakeable size, no matter
+ * which code path asked for it.
+ *
+ * Products without constraints are returned byte-identical (same object
+ * values, no rounding), so existing behaviour — including the
+ * fractional lengths the Material setup modal produces — is untouched.
+ */
+export function constrainDimensions(
+  config: ProductConfig,
+  lengthMm: number,
+  widthMm: number
+): { lengthMm: number; widthMm: number } {
+  const hasFixedLength = typeof config.fixedLengthMm === "number";
+  const range = config.widthRangeMm;
+  if (!hasFixedLength && !range) return { lengthMm, widthMm };
+
+  const nextLength = hasFixedLength
+    ? (config.fixedLengthMm as number)
+    : lengthMm;
+  let nextWidth = widthMm;
+  if (range) {
+    // Guard against a NaN / non-finite input landing in state — fall
+    // back to the range's lower bound rather than poisoning the canvas.
+    const w = Number(nextWidth);
+    nextWidth = Number.isFinite(w)
+      ? Math.min(range.max, Math.max(range.min, w))
+      : range.min;
+  }
+  return { lengthMm: nextLength, widthMm: nextWidth };
+}
+
 /** Translate the legacy productConfig `canvasClipShape` into a CanvasShape. */
 export function shapeFromProductConfig(c: ProductConfig): CanvasShape {
   switch (c.canvasClipShape) {
@@ -821,41 +860,75 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
 
   canvasLengthMm: 90,
   canvasWidthMm: 50,
-  setCanvasSize: (lengthMm, widthMm) =>
+  setCanvasSize: (lengthMm, widthMm) => {
+    // Hard product constraints win over every caller (URL seed, preset
+    // pill, material modal, history restore).
+    const { lengthMm: L, widthMm: W } = constrainDimensions(
+      get().productConfig,
+      lengthMm,
+      widthMm
+    );
     set({
-      canvasLengthMm: lengthMm,
-      canvasWidthMm: widthMm,
+      canvasLengthMm: L,
+      canvasWidthMm: W,
       // Refresh the cached ratio whenever the dimensions are reseeded.
-      aspectRatio: lengthMm / widthMm,
-    }),
+      aspectRatio: L / W,
+    });
+  },
 
   isAspectRatioLocked: true,
-  setAspectRatioLocked: (locked) => set({ isAspectRatioLocked: locked }),
+  setAspectRatioLocked: (locked) => {
+    // Products that pin one edge (printed ribbons) can never link the
+    // two fields — linking would try to rescale the fixed length.
+    if (get().productConfig.aspectRatioLinkDisabled) {
+      set({ isAspectRatioLocked: false });
+      return;
+    }
+    set({ isAspectRatioLocked: locked });
+  },
   aspectRatio: 90 / 50,
   setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
   updateLength: (lengthMm) => {
     const s = get();
+    const cfg = s.productConfig;
+    // A fixed-length product ignores length edits outright — no state
+    // write at all, so the input snaps straight back to e.g. 150 mm.
+    if (typeof cfg.fixedLengthMm === "number") {
+      if (s.canvasLengthMm !== cfg.fixedLengthMm) {
+        const c = constrainDimensions(cfg, s.canvasLengthMm, s.canvasWidthMm);
+        set({ canvasLengthMm: c.lengthMm, canvasWidthMm: c.widthMm });
+      }
+      return;
+    }
     const safeLength = Math.max(10, Math.round(lengthMm));
     if (s.isAspectRatioLocked && s.aspectRatio > 0) {
       const safeWidth = Math.max(10, Math.round(safeLength / s.aspectRatio));
-      set({ canvasLengthMm: safeLength, canvasWidthMm: safeWidth });
+      const c = constrainDimensions(cfg, safeLength, safeWidth);
+      set({ canvasLengthMm: c.lengthMm, canvasWidthMm: c.widthMm });
     } else {
-      set({ canvasLengthMm: safeLength });
+      const c = constrainDimensions(cfg, safeLength, s.canvasWidthMm);
+      set({ canvasLengthMm: c.lengthMm, canvasWidthMm: c.widthMm });
     }
   },
   updateWidth: (widthMm) => {
     const s = get();
+    const cfg = s.productConfig;
     const safeWidth = Math.max(10, Math.round(widthMm));
     if (s.isAspectRatioLocked && s.aspectRatio > 0) {
       const safeLength = Math.max(10, Math.round(safeWidth * s.aspectRatio));
-      set({ canvasLengthMm: safeLength, canvasWidthMm: safeWidth });
+      const c = constrainDimensions(cfg, safeLength, safeWidth);
+      set({ canvasLengthMm: c.lengthMm, canvasWidthMm: c.widthMm });
     } else {
-      set({ canvasWidthMm: safeWidth });
+      const c = constrainDimensions(cfg, s.canvasLengthMm, safeWidth);
+      set({ canvasLengthMm: c.lengthMm, canvasWidthMm: c.widthMm });
     }
   },
 
   toggleOrientation: () => {
     const s = get();
+    // Physically fixed orientation (a printed ribbon is always a
+    // horizontal strip) — swallow the swap entirely.
+    if (s.productConfig.orientationLocked) return;
     const oldLengthMm = s.canvasLengthMm;
     const oldWidthMm = s.canvasWidthMm;
     const newLengthMm = oldWidthMm;
@@ -969,9 +1042,21 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
     const next = c.allowedShapes.includes(seeded)
       ? seeded
       : c.allowedShapes[0] ?? "rectangle";
+    // Re-apply the new product's hard dimension constraints to whatever
+    // size is currently in state (the handle can be resolved before OR
+    // after the URL dimensions are seeded), and pin the aspect-ratio
+    // link off for products that forbid it.
+    const cur = get();
+    const dims = constrainDimensions(c, cur.canvasLengthMm, cur.canvasWidthMm);
     set({
       productConfig: c,
       canvasShape: next as CanvasShape,
+      canvasLengthMm: dims.lengthMm,
+      canvasWidthMm: dims.widthMm,
+      aspectRatio: dims.lengthMm / Math.max(1, dims.widthMm),
+      isAspectRatioLocked: c.aspectRatioLinkDisabled
+        ? false
+        : cur.isAspectRatioLocked,
     });
   },
 
@@ -1567,6 +1652,16 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
           : null;
 
       // ----- Apply atomically to the store -----------------------------
+      // Hard product constraints are re-applied to the SAVED dimensions:
+      // a design saved before a constraint existed (or under a different
+      // product) must still land on a makeable canvas — e.g. a ribbon is
+      // restored at 150 mm with its height clamped to 10–50 mm.
+      const restoredDims = constrainDimensions(
+        get().productConfig,
+        frontLen,
+        frontWid
+      );
+
       // One set() so the dim-change effect in Workspace observes a
       // CONSISTENT target state on its first re-render.
       set((s) => ({
@@ -1575,9 +1670,10 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
         backDesign: backSnap,
         tagOrientation: frontOrientation,
         backgroundColor: frontBg,
-        canvasLengthMm: frontLen,
-        canvasWidthMm: frontWid,
-        aspectRatio: frontLen / Math.max(1, frontWid),
+        canvasLengthMm: restoredDims.lengthMm,
+        canvasWidthMm: restoredDims.widthMm,
+        aspectRatio:
+          restoredDims.lengthMm / Math.max(1, restoredDims.widthMm),
         _skipNextDimRescale: true,
         canvasShape:
           (restoredCanvasShape as CanvasShape | null) ?? s.canvasShape,
@@ -1592,7 +1688,11 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       // pattern setActiveSide uses).
       const fabricPayload = { ...frontJsonObj, background: frontBg };
       const { designOps } = await import("@/components/Workspace");
-      await designOps.loadJson(fabricPayload, frontLen, frontWid);
+      await designOps.loadJson(
+        fabricPayload,
+        restoredDims.lengthMm,
+        restoredDims.widthMm
+      );
 
       // After loadJson resolves, force a fresh guide redraw using the
       // CURRENT store state. This bypasses React effect batching: even

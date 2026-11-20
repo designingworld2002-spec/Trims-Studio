@@ -1956,25 +1956,87 @@ export function Workspace() {
 
     let didProgrammaticChange = false;
     if (!skipRescale && dimsChanged && prev.length > 0 && prev.width > 0) {
-      const scaleX = lengthMm / prev.length;
-      const scaleY = widthMm / prev.width;
-      const shouldRescale =
-        scaleX > 0 && scaleY > 0 && (scaleX !== 1 || scaleY !== 1);
-      if (shouldRescale) {
-        const cx = VIRTUAL_SIZE / 2;
-        const cy = VIRTUAL_SIZE / 2;
-        const hist = historyRef.current;
-        hist?.pause();
-        canvas.getObjects().forEach((o) => {
-          if ((o as any).excludeFromExport) return;
-          o.scaleX = (o.scaleX ?? 1) * scaleX;
-          o.scaleY = (o.scaleY ?? 1) * scaleY;
-          o.left = cx + ((o.left ?? 0) - cx) * scaleX;
-          o.top = cy + ((o.top ?? 0) - cy) * scaleY;
-          o.setCoords();
-        });
-        hist?.resume(false);
-        didProgrammaticChange = true;
+      const preserveAspect =
+        useCanvasStore.getState().productConfig.preserveAspectOnResize ===
+        true;
+      const cx = VIRTUAL_SIZE / 2;
+      const cy = VIRTUAL_SIZE / 2;
+
+      if (preserveAspect) {
+        // ── Uniform rescale (printed ribbons) ───────────────────────────
+        // The length is pinned (150 mm); only the HEIGHT moves. Scale
+        // every foreground object by ONE factor so nothing distorts, and
+        // clamp that factor so the artwork never spills past the new
+        // safe area on either axis.
+        const foreground = canvas
+          .getObjects()
+          .filter((o) => !(o as any).excludeFromExport);
+        if (foreground.length > 0) {
+          // Combined bounding box of the foreground, in canvas px.
+          let minX = Infinity;
+          let minY = Infinity;
+          let maxX = -Infinity;
+          let maxY = -Infinity;
+          foreground.forEach((o) => {
+            const r = o.getBoundingRect(true, true);
+            minX = Math.min(minX, r.left);
+            minY = Math.min(minY, r.top);
+            maxX = Math.max(maxX, r.left + r.width);
+            maxY = Math.max(maxY, r.top + r.height);
+          });
+          const bbW = Math.max(1, maxX - minX);
+          const bbH = Math.max(1, maxY - minY);
+
+          // Safe area at the NEW dims (bleed inset SAFETY_MM per side).
+          const safeWpx = Math.max(
+            1,
+            (lengthMm - SAFETY_MM * 2) * MM_TO_PX
+          );
+          const safeHpx = Math.max(
+            1,
+            (widthMm - SAFETY_MM * 2) * MM_TO_PX
+          );
+
+          // Height drives the base factor; clamp so the scaled box fits
+          // inside the new safe width AND height. Taking the min means
+          // growth never overflows and shrink always settles inside.
+          const heightRatio = widthMm / prev.width;
+          const k = Math.min(heightRatio, safeWpx / bbW, safeHpx / bbH);
+
+          if (k > 0 && Number.isFinite(k) && k !== 1) {
+            const hist = historyRef.current;
+            hist?.pause();
+            foreground.forEach((o) => {
+              o.scaleX = (o.scaleX ?? 1) * k;
+              o.scaleY = (o.scaleY ?? 1) * k;
+              o.left = cx + ((o.left ?? 0) - cx) * k;
+              o.top = cy + ((o.top ?? 0) - cy) * k;
+              o.setCoords();
+            });
+            hist?.resume(false);
+            didProgrammaticChange = true;
+          }
+        }
+      } else {
+        // ── Default per-axis rescale (every other product) ──────────────
+        const scaleX = lengthMm / prev.length;
+        const scaleY = widthMm / prev.width;
+        const shouldRescale =
+          scaleX > 0 && scaleY > 0 && (scaleX !== 1 || scaleY !== 1);
+        if (shouldRescale) {
+          const hist = historyRef.current;
+          hist?.pause();
+          canvas.getObjects().forEach((o) => {
+            if ((o as any).excludeFromExport) return;
+            o.scaleX = (o.scaleX ?? 1) * scaleX;
+            o.scaleY = (o.scaleY ?? 1) * scaleY;
+            o.left = cx + ((o.left ?? 0) - cx) * scaleX;
+            o.top = cy + ((o.top ?? 0) - cy) * scaleY;
+            o.setCoords();
+          });
+          hist?.resume(false);
+          didProgrammaticChange = true;
+        }
       }
     }
     prevDimsRef.current = { length: lengthMm, width: widthMm };
@@ -2254,12 +2316,46 @@ export function Workspace() {
   // Fits 90% of the smaller axis, but the height axis first has the mobile
   // bottom inset carved off so the design is measured against the space
   // actually visible above the sheet / bars, not the full container.
+  //
+  // `fitStageToBleed` products (printed ribbons) instead fit the BLEED
+  // BOX. The virtual stage is a fixed 2000x2000 px square, so a product
+  // with an extreme aspect ratio fills only a sliver of it: a
+  // 150 x 10 mm ribbon is 1500 x 100 px, i.e. 5% of the square's area,
+  // and the square-based fit renders it unreadably small. Measuring the
+  // bleed instead lets the ribbon use the full width of the work area.
+  // The surrounding stage simply overflows into the clipped, fully
+  // TRANSPARENT margin of the canvas (nothing is drawn there), so no
+  // other visual is affected - and the flag is opt-in, so every existing
+  // product keeps the square fit exactly as before.
   const recomputeFit = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const availW = rect.width;
     const availH = Math.max(1, rect.height - bottomReserveRef.current);
+
+    const store = useCanvasStore.getState();
+    if (store.productConfig.fitStageToBleed) {
+      const bleedWPx = Math.max(1, store.canvasLengthMm * MM_TO_PX);
+      const bleedHPx = Math.max(1, store.canvasWidthMm * MM_TO_PX);
+      // Room for the rulers + the Safety/Bleed badge row, which sit
+      // OUTSIDE the bleed (30 px above, ~28 px below, 14 px either side).
+      // GUTTER_X also clears the floating zoom / guides column that
+      // overlays the right edge of the work area. It scales with the
+      // viewport so a phone does not spend 43% of its width on margins,
+      // and caps at the desktop value.
+      const GUTTER_X = Math.min(160, availW * 0.26);
+      const GUTTER_Y = Math.min(108, availH * 0.3);
+      const usableW = Math.max(1, availW - GUTTER_X);
+      const usableH = Math.max(1, availH - GUTTER_Y);
+      const byBleed = Math.min(usableW / bleedWPx, usableH / bleedHPx);
+      // Never upscale past 1:1 - the canvas is authored at 10 px/mm and
+      // scaling beyond that only softens text and artwork.
+      const next = Math.min(1, byBleed);
+      setFitScale(next > 0 ? next : 1);
+      return;
+    }
+
     const target = Math.min(availW, availH) * 0.9;
     const next = target / VIRTUAL_SIZE;
     setFitScale(next > 0 ? next : 1);
@@ -2272,7 +2368,11 @@ export function Workspace() {
     const ro = new ResizeObserver(recomputeFit);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [recomputeFit]);
+    // `lengthMm` / `widthMm` are dependencies because the bleed-box fit
+    // above reads them - a ribbon height change must re-fit and
+    // re-centre the stage (the square fit is dimension-independent, so
+    // this is a no-op re-run for every other product).
+  }, [recomputeFit, lengthMm, widthMm]);
 
   // Recompute the reserved mobile inset whenever the chrome state changes.
   // The sheet (55vh) dominates; otherwise reserve the nav (+ selection bar

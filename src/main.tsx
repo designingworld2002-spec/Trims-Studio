@@ -38,6 +38,9 @@ installFabricControlDefaults();
   const cfg = readUrlConfig(productConfig.defaultDimensions);
   const s = useCanvasStore.getState();
   s.setProductConfig(productConfig);
+  // setCanvasSize applies the product's hard dimension constraints, so a
+  // URL carrying an impossible size (e.g. ?product=printed-ribbons with
+  // length=90&width=70) still boots onto a makeable canvas (150 x 50 mm).
   s.setCanvasSize(cfg.lengthMm, cfg.widthMm);
   // Template mode is always locked; upload mode starts locked but the user
   // can break the link via the chain icon in the Product Options panel.
@@ -69,7 +72,16 @@ installFabricControlDefaults();
   const materialParam = new URLSearchParams(window.location.search).get(
     "material"
   );
-  s.setMaterial(normaliseMaterial(materialParam, productConfig.handle));
+  // `defaultMaterial` is the last link in the chain: it rescues printed
+  // products whose handle names no fabric (printed-ribbons -> Satin) from
+  // falling through to the Woven formula.
+  s.setMaterial(
+    normaliseMaterial(
+      materialParam,
+      productConfig.handle,
+      productConfig.defaultMaterial
+    )
+  );
 
   if (
     !materialParam &&
