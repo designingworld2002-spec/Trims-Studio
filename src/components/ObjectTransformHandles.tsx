@@ -33,6 +33,10 @@ export function ObjectTransformHandles({
   getScale: () => number;
 }) {
   const canvas = useCanvasStore((s) => s.canvas);
+  // Subscribe to the store's selection so the cluster re-renders — and
+  // unmounts — the instant the selection clears, independent of the
+  // position state Workspace feeds in.
+  const selected = useCanvasStore((s) => s.selected);
   const [degPill, setDegPill] = useState<number | null>(null);
   const dragRef = useRef<{ lastX: number; lastY: number; moved: boolean } | null>(
     null
@@ -46,7 +50,10 @@ export function ObjectTransformHandles({
     changed: boolean;
   } | null>(null);
 
-  if (!canvas) return null;
+  // Strict visibility guard: no canvas, no store selection, or no live
+  // Fabric active object → render nothing (belt-and-braces alongside the
+  // Workspace `transformHandles.visible` gate).
+  if (!canvas || !selected || !canvas.getActiveObject()) return null;
 
   /* --------------------------- Drag --------------------------- */
   const onDragDown = (e: React.PointerEvent<HTMLButtonElement>) => {

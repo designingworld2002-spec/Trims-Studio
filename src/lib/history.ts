@@ -58,6 +58,12 @@ const TOJSON_WHITELIST = [
   "qrUrl",
   "qrFgColor",
   "qrBgColor",
+  // Washcare identity + chosen colour, so reloaded designs keep the
+  // washcare recolour behaviour and the correct swatch.
+  "name",
+  "washcareKey",
+  "isWashcare",
+  "washcareColor",
 ];
 
 export class HistoryManager {

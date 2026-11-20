@@ -870,6 +870,45 @@ function colorTarget(obj: any): "fill" | "stroke" {
   return "fill";
 }
 
+/** A fill/stroke value that actually paints something visible. */
+function isPaintVisible(v: any): boolean {
+  return (
+    typeof v === "string" &&
+    v !== "" &&
+    v !== "none" &&
+    v !== "transparent" &&
+    v !== "rgba(0,0,0,0)"
+  );
+}
+
+/**
+ * Recolour a vector object (a washcare symbol, a table, or any shape /
+ * group) to `color`, recursing through nested groups.
+ *
+ *   - Updates `fill` only on nodes whose fill currently paints (truthy and
+ *     not none/transparent) — so hollow outlines (wash tub, bleach
+ *     triangle, iron, tumble-dry circle) stay crisp outlines.
+ *   - Updates `stroke` only on nodes whose stroke currently paints — so
+ *     stroked symbols and table rules recolour, while solid dots / text
+ *     recolour via fill.
+ *   - Sets `dirty = true` on EVERY node and its ancestors. Fabric 5 caches
+ *     both the group bitmap AND each child's bitmap, so a child-only change
+ *     with just `group.dirty` renders the child from its STALE cache — both
+ *     must be invalidated or the recolour never shows.
+ */
+function recolorVectorObject(obj: any, color: string): void {
+  if (!obj) return;
+  const kids: any[] = Array.isArray(obj._objects) ? obj._objects : [];
+  if (kids.length > 0) {
+    kids.forEach((child) => recolorVectorObject(child, color));
+    obj.dirty = true;
+    return;
+  }
+  if (isPaintVisible(obj.fill)) obj.set("fill", color);
+  if (isPaintVisible(obj.stroke)) obj.set("stroke", color);
+  obj.dirty = true;
+}
+
 export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   canvas: null,
   setCanvas: (c) => set({ canvas: c }),
@@ -1226,8 +1265,12 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       anyObj.type === "group" && Array.isArray(anyObj._objects) && anyObj._objects[0]
         ? anyObj._objects[0].stroke
         : anyObj.stroke;
-    const visibleColor =
-      target === "stroke"
+    // A washcare symbol remembers its chosen colour directly, so the
+    // swatch stays accurate when switching between two differently
+    // coloured signs (and after reload). Otherwise read the visible paint.
+    const visibleColor = isPaintVisible(anyObj.washcareColor)
+      ? anyObj.washcareColor
+      : target === "stroke"
         ? safeString(strokeSource, DEFAULT_SELECTED.fill)
         : safeString(anyObj.fill, DEFAULT_SELECTED.fill);
     const next: SelectedItemState = {
@@ -1378,16 +1421,14 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
         // paths are stroke-coloured). For groups (tables), fan out to
         // each child using its own routing so a single colour pick
         // recolours every line in the table.
-        if (
-          active.type === "group" &&
-          Array.isArray((active as any)._objects)
-        ) {
-          (active as any)._objects.forEach((child: any) => {
-            child.set(colorTarget(child) as any, v as any);
-          });
-          // Tell fabric the group needs a re-render — child mutations
-          // don't always invalidate the cached group bitmap.
-          (active as any).dirty = true;
+        const isGroup =
+          active.type === "group" && Array.isArray((active as any)._objects);
+        const isWash = (active as any).isWashcare === true;
+        if (isGroup || isWash) {
+          // Walk the whole tree, recolouring visible fills + strokes and
+          // marking every node dirty (Fabric 5 caches children too).
+          recolorVectorObject(active, String(v));
+          if (isWash) (active as any).washcareColor = v;
         } else {
           active.set(colorTarget(active) as any, v as any);
         }

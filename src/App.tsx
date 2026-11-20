@@ -61,6 +61,17 @@ export default function App() {
       const obj = canvas?.getActiveObject();
       const objIsUserContent = obj && !(obj as any).excludeFromExport;
 
+      // Escape — deselect the active object (fires selection:cleared, which
+      // dismisses the action menu + Drag/Rotate handles together).
+      if (key === "Escape") {
+        if (canvas && obj) {
+          e.preventDefault();
+          canvas.discardActiveObject();
+          canvas.requestRenderAll();
+        }
+        return;
+      }
+
       // Undo / Redo
       if (meta && lk === "z" && !e.shiftKey) {
         e.preventDefault();

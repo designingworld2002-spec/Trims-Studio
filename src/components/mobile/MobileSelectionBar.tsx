@@ -76,8 +76,11 @@ export function MobileSelectionBar() {
   const isText = selected.type === "text";
   const isImage = selected.type === "image";
   // Fill-color only makes sense for text + fillable shapes (QR / barcode /
-  // image recolour via their own regenerators, not a plain fill).
-  const showColor = isText || selected.type === "shape";
+  // image recolour via their own regenerators, not a plain fill). Groups —
+  // washcare symbols and tables — recolour through the vector walk in
+  // patchActive, so they get the Color control too (matching Desktop).
+  const showColor =
+    isText || selected.type === "shape" || selected.type === "group";
 
   return (
     <div

@@ -79,6 +79,10 @@ export class Autosave {
         "qrUrl",
         "qrFgColor",
         "qrBgColor",
+        "name",
+        "washcareKey",
+        "isWashcare",
+        "washcareColor",
       ]);
     } catch (e) {
       // Same defensive guard as HistoryManager — broken third-party objects

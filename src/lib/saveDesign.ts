@@ -867,6 +867,10 @@ function snapshotLive(
     "barColor",
     "barBgColor",
     "barHasBg",
+    "name",
+    "washcareKey",
+    "isWashcare",
+    "washcareColor",
   ]);
 
   // NOW restore the editor-only warning strokes (after BOTH the PNG and

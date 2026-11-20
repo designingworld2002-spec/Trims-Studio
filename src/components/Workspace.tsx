@@ -1515,6 +1515,10 @@ export function Workspace() {
       window.setTimeout(() => {
         updateActiveObject(null);
         setActionMenuPos((p) => ({ ...p, visible: false }));
+        // Dismiss the Drag/Rotate cluster together with the action menu —
+        // selection:cleared fires for empty-canvas clicks, Delete, Escape,
+        // side switches and programmatic discardActiveObject.
+        setTransformHandles((p) => (p.visible ? { ...p, visible: false } : p));
         setWarnBadge((p) => ({ ...p, visible: false }));
       }, 0);
     };
@@ -2483,6 +2487,23 @@ export function Workspace() {
       ref={containerRef}
       className="relative w-full h-full flex items-center justify-center overflow-hidden transition-[padding] duration-300 ease-out"
       style={{ paddingBottom: bottomReserve || undefined }}
+      onPointerDown={(e) => {
+        // Clicking the grey workspace BACKDROP (the container itself, not
+        // the stage / canvas / any floating control) deselects — Fabric
+        // only fires selection:cleared for clicks INSIDE the canvas, so
+        // the surrounding area needs this. The strict `target === container`
+        // check means clicks on the stage, toolbars, action menu or the
+        // transform handles never reach here (and the handles also
+        // stopPropagation on their own pointerdown), so an in-progress
+        // drag is never interrupted.
+        if (previewMode) return;
+        if (e.target !== containerRef.current) return;
+        const c = useCanvasStore.getState().canvas;
+        if (c && c.getActiveObject()) {
+          c.discardActiveObject();
+          c.requestRenderAll();
+        }
+      }}
     >
       <div
         ref={stageRef}

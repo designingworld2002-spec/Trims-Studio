@@ -212,6 +212,12 @@ export function WashcareModal({
       // with left/top origins survives the round-trip exactly.
       obj.set({ originX: "left", originY: "top" });
       (obj as any).washcareKey = sign.key;
+      // Stable identity so the colour control recognises it (even for a
+      // single-path symbol that comes back as a lone fabric.Path, not a
+      // Group) and so saved/reloaded designs keep washcare behaviour.
+      (obj as any).isWashcare = true;
+      // Default colour (the SVG currentColor was baked to #111111 above).
+      (obj as any).washcareColor = "#111111";
       obj.name = `washcare-${sign.key}`;
 
       // Scale to ~22 mm (clamped so it never dwarfs a tiny label).
