@@ -12,6 +12,10 @@ export function TopBar() {
   const widthMm = useCanvasStore((s) => s.canvasWidthMm);
   const material = useCanvasStore((s) => s.material);
   const productHandle = useCanvasStore((s) => s.productConfig.handle);
+  const quantityUnit = useCanvasStore((s) => s.productConfig.quantityUnit);
+  const hideLengthInput = useCanvasStore(
+    (s) => s.productConfig.hideLengthInput ?? false
+  );
   const canUndo = useCanvasStore((s) => s.canUndo);
   const canRedo = useCanvasStore((s) => s.canRedo);
   const lastSavedAt = useCanvasStore((s) => s.lastSavedAt);
@@ -39,6 +43,18 @@ export function TopBar() {
     quoteQty,
     { hasBackPanel: hasBackSide, productHandle }
   );
+
+  // Quantity wording: "rolls" for ribbons, "units" otherwise.
+  const unitLabel = quantityUnit
+    ? quoteQty === 1
+      ? quantityUnit.singular
+      : quantityUnit.plural
+    : "units";
+  // Dimension wording: ribbons hide the fixed 150 mm length, showing the
+  // width only.
+  const dimLabel = hideLengthInput
+    ? `${widthMm} mm wide`
+    : `${lengthMm} × ${widthMm} mm`;
 
   // If the design is 2-sided, intercept "Next" with a price-transparency
   // confirmation instead of jumping straight to Preview/Finalize.
@@ -69,11 +85,11 @@ export function TopBar() {
           data-tour="live-price"
           className="text-[11px] text-vp-muted truncate leading-tight tabular-nums mt-0.5"
         >
-          For {lengthMm} × {widthMm} mm •{" "}
+          For {dimLabel} •{" "}
           <span className="font-semibold text-vp-ink/80">
             Rs. {formatPrice(livePrice)}
           </span>{" "}
-          / {quoteQty} units
+          / {quoteQty} {unitLabel}
         </div>
       </div>
 

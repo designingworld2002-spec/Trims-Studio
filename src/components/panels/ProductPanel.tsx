@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link2, Link2Off, Lock } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import type { CanvasShape } from "@/store/canvasStore";
+import { RIBBON_RATE_BY_WIDTH, formatPrice } from "@/lib/pricing";
 import { RecentDesignsSection } from "./RecentDesignsSection";
 
 /**
@@ -50,7 +51,27 @@ export function ProductPanel() {
   const orientationLocked = useCanvasStore(
     (s) => s.productConfig.orientationLocked ?? false
   );
+  // Discrete-width / roll-form products (printed ribbons): a Width
+  // dropdown replaces the free numeric inputs + preset cards entirely.
+  const allowedWidthsMm = useCanvasStore(
+    (s) => s.productConfig.allowedWidthsMm
+  );
+  const hideLengthInput = useCanvasStore(
+    (s) => s.productConfig.hideLengthInput ?? false
+  );
+  const rollLengthMeters = useCanvasStore(
+    (s) => s.productConfig.rollLengthMeters
+  );
+  const minOrderQuantity = useCanvasStore(
+    (s) => s.productConfig.minOrderQuantity
+  );
   const mode = useCanvasStore((s) => s.mode);
+
+  const widthDropdownMode = !!(
+    hideLengthInput &&
+    allowedWidthsMm &&
+    allowedWidthsMm.length > 0
+  );
 
   const isHorizontal = lengthMm >= widthMm;
   const lengthIsFixed = typeof fixedLengthMm === "number";
@@ -140,10 +161,23 @@ export function ProductPanel() {
         </div>
       )}
 
+      {/* Printed ribbons: a single Width dropdown (discrete, priced
+          per roll). Replaces the Length/Width inputs + preset cards. */}
+      {widthDropdownMode && allowedWidthsMm && (
+        <RibbonWidthSelect
+          widthMm={widthMm}
+          allowedWidthsMm={allowedWidthsMm}
+          rollLengthMeters={rollLengthMeters}
+          minOrderQuantity={minOrderQuantity}
+          fixedLengthMm={fixedLengthMm ?? 150}
+        />
+      )}
+
       {/* Length / Width with optional chain link. HIDDEN for
           fixed-size-only products — those can only change size via the
-          preset pills below (no free-form custom dimensions). */}
-      {!fixedSizesOnly && (
+          preset pills below (no free-form custom dimensions) — and for
+          discrete-width products (the dropdown above replaces them). */}
+      {!fixedSizesOnly && !widthDropdownMode && (
         <>
           <div className="flex items-end gap-2">
             <NumField
@@ -212,20 +246,23 @@ export function ProductPanel() {
       )}
 
       {/* Preset sizes — derived from the current aspect ratio so the
-          design never distorts when a preset is clicked. */}
-      <SizePresets
-        lengthMm={lengthMm}
-        widthMm={widthMm}
-        presetSizes={presetSizes}
-        fixedLengthMm={fixedLengthMm}
-        onPick={(l, w) => {
-          // Use setCanvasSize directly to update BOTH axes atomically.
-          // updateLength/updateWidth go through the aspect-lock logic
-          // which would round differently; presets carry their own
-          // aspect-preserving math.
-          useCanvasStore.getState().setCanvasSize(l, w);
-        }}
-      />
+          design never distorts when a preset is clicked. Hidden for the
+          discrete-width dropdown products. */}
+      {!widthDropdownMode && (
+        <SizePresets
+          lengthMm={lengthMm}
+          widthMm={widthMm}
+          presetSizes={presetSizes}
+          fixedLengthMm={fixedLengthMm}
+          onPick={(l, w) => {
+            // Use setCanvasSize directly to update BOTH axes atomically.
+            // updateLength/updateWidth go through the aspect-lock logic
+            // which would round differently; presets carry their own
+            // aspect-preserving math.
+            useCanvasStore.getState().setCanvasSize(l, w);
+          }}
+        />
+      )}
 
       {/* Dynamic Shape Selection — currently surfaced for Hangtags but
           works for any product. Live modifier sliders give exact mm
@@ -717,6 +754,83 @@ function ModifierSlider({
         <span>{min}{suffix}</span>
         <span>{max}{suffix}</span>
       </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Printed-ribbon width dropdown (discrete, priced per roll)           */
+/* ------------------------------------------------------------------ */
+
+function RibbonWidthSelect({
+  widthMm,
+  allowedWidthsMm,
+  rollLengthMeters,
+  minOrderQuantity,
+  fixedLengthMm,
+}: {
+  widthMm: number;
+  allowedWidthsMm: number[];
+  rollLengthMeters?: number;
+  minOrderQuantity?: number;
+  fixedLengthMm: number;
+}) {
+  // The store always snaps widthMm onto an allowed value, so the live
+  // value maps 1:1 onto an <option>.
+  const onPick = (w: number) => {
+    // setCanvasSize pins the length (150 mm) and snaps the width; the
+    // Workspace dim-effect then scales artwork uniformly + re-fits.
+    useCanvasStore.getState().setCanvasSize(fixedLengthMm, w);
+  };
+
+  return (
+    <div>
+      <label
+        htmlFor="ribbon-width-select"
+        className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 mb-2"
+      >
+        Width (mm)
+      </label>
+      <div className="relative">
+        <select
+          id="ribbon-width-select"
+          value={String(widthMm)}
+          onChange={(e) => onPick(Number(e.target.value))}
+          className="w-full h-10 pl-3.5 pr-9 rounded-lg border border-vp-border text-[13px] font-medium tabular-nums bg-white appearance-none focus:outline-none focus:border-vp-blue focus:ring-2 focus:ring-vp-blue/15 transition"
+        >
+          {allowedWidthsMm.map((w) => {
+            const rate = RIBBON_RATE_BY_WIDTH[w];
+            return (
+              <option key={w} value={String(w)}>
+                {w} mm{rate ? ` — Rs. ${formatPrice(rate)} / roll` : ""}
+              </option>
+            );
+          })}
+        </select>
+        <svg
+          viewBox="0 0 12 8"
+          className="absolute right-3 top-1/2 -translate-y-1/2 w-3 h-2 text-slate-400 pointer-events-none"
+          fill="none"
+          aria-hidden
+        >
+          <path
+            d="M1 1L6 7L11 1"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </div>
+      <p className="mt-2 text-[11px] text-vp-muted">
+        {rollLengthMeters != null
+          ? `Roll length: ${rollLengthMeters} mtr fixed`
+          : ""}
+        {rollLengthMeters != null && minOrderQuantity != null ? " • " : ""}
+        {minOrderQuantity != null
+          ? `Min. order: ${minOrderQuantity} rolls`
+          : ""}
+      </p>
     </div>
   );
 }

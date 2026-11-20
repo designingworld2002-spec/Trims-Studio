@@ -280,19 +280,35 @@ export function constrainDimensions(
 ): { lengthMm: number; widthMm: number } {
   const hasFixedLength = typeof config.fixedLengthMm === "number";
   const range = config.widthRangeMm;
-  if (!hasFixedLength && !range) return { lengthMm, widthMm };
+  const allowed = config.allowedWidthsMm;
+  const hasAllowed = Array.isArray(allowed) && allowed.length > 0;
+  if (!hasFixedLength && !range && !hasAllowed) {
+    return { lengthMm, widthMm };
+  }
 
   const nextLength = hasFixedLength
     ? (config.fixedLengthMm as number)
     : lengthMm;
-  let nextWidth = widthMm;
+
+  let nextWidth = Number(widthMm);
+  if (!Number.isFinite(nextWidth)) {
+    // Non-finite input — fall back to the range floor / first allowed
+    // value rather than poisoning the canvas.
+    nextWidth = range ? range.min : hasAllowed ? allowed![0] : widthMm;
+  }
   if (range) {
-    // Guard against a NaN / non-finite input landing in state — fall
-    // back to the range's lower bound rather than poisoning the canvas.
-    const w = Number(nextWidth);
-    nextWidth = Number.isFinite(w)
-      ? Math.min(range.max, Math.max(range.min, w))
-      : range.min;
+    nextWidth = Math.min(range.max, Math.max(range.min, nextWidth));
+  }
+  if (hasAllowed) {
+    // Snap to the NEAREST allowed width (ties resolve UP — 18 → 20 — so a
+    // value landing exactly between two stocked widths picks the larger).
+    // Guarantees any URL param or restored design resolves to a real,
+    // priced width (printed ribbons: 12/16/20/25/30/40/50 mm).
+    nextWidth = allowed!.reduce(
+      (best, v) =>
+        Math.abs(v - nextWidth) <= Math.abs(best - nextWidth) ? v : best,
+      allowed![0]
+    );
   }
   return { lengthMm: nextLength, widthMm: nextWidth };
 }

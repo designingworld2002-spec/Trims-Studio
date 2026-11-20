@@ -108,12 +108,63 @@ function hangtagRate(qty: number): number {
 export const LABEL_MOQ = 500;
 export const HANGTAG_MOQ = 1000;
 
+/* ------------------------------------------------------------------ */
+/* Printed ribbons — priced PER ROLL by discrete width.                */
+/* ------------------------------------------------------------------ */
+
+/** Per-roll price (Rs.) for each stocked ribbon width (mm). */
+export const RIBBON_RATE_BY_WIDTH: Record<number, number> = {
+  12: 300,
+  16: 400,
+  20: 500,
+  25: 600,
+  30: 800,
+  40: 1000,
+  50: 1200,
+};
+
+/** The stocked ribbon widths, ascending. */
+export const RIBBON_ALLOWED_WIDTHS_MM = [12, 16, 20, 25, 30, 40, 50];
+
+/** Minimum order: 2 rolls. */
+export const RIBBON_MOQ = 2;
+
+/** Flat price (Rs.) of a 1-roll physical sample. */
+export const RIBBON_SAMPLE_PRICE = 1500;
+
+/** True when a product handle denotes printed ribbons. */
+export function isRibbonHandle(handle?: string | null): boolean {
+  return !!handle && /ribbon/i.test(handle);
+}
+
 /**
- * Resolve the MOQ for a product from its handle — hangtags require 1000, every
- * other product 500. Mirrors the finalize page's `MIN_QTY` logic.
+ * Snap any width to the NEAREST stocked ribbon width (ties resolve UP, so
+ * 18 → 20). Keeps the studio quote and finalize page on a real priced
+ * value even for an out-of-list URL param.
+ */
+export function snapRibbonWidth(widthMm: number): number {
+  const w = Number(widthMm);
+  if (!Number.isFinite(w)) return 25;
+  return RIBBON_ALLOWED_WIDTHS_MM.reduce(
+    (best, v) => (Math.abs(v - w) <= Math.abs(best - w) ? v : best),
+    RIBBON_ALLOWED_WIDTHS_MM[0]
+  );
+}
+
+/** Per-roll price for a given (snapped) ribbon width. */
+export function ribbonRatePerRoll(widthMm: number): number {
+  return RIBBON_RATE_BY_WIDTH[snapRibbonWidth(widthMm)] ?? 0;
+}
+
+/**
+ * Resolve the MOQ for a product from its handle — hangtags require 1000,
+ * ribbons 2 rolls, every other product 500. Mirrors the finalize page's
+ * `MIN_QTY` logic.
  */
 export function minQtyFor(productHandle?: string | null): number {
-  return productHandle && /hang/i.test(productHandle) ? HANGTAG_MOQ : LABEL_MOQ;
+  if (productHandle && /hang/i.test(productHandle)) return HANGTAG_MOQ;
+  if (isRibbonHandle(productHandle)) return RIBBON_MOQ;
+  return LABEL_MOQ;
 }
 
 /**
@@ -147,6 +198,14 @@ export function calculateBasePrice(
   const q = Number(qty);
   if (!isFinite(L) || !isFinite(W) || !isFinite(q) || L <= 0 || W <= 0 || q <= 0) {
     return 0;
+  }
+
+  // ── Printed ribbons: priced PER ROLL by discrete width ────────────────────
+  // total = per-roll rate (by snapped width) × roll quantity. No area, no
+  // material/quality/back multipliers — a flat per-roll price. Detection
+  // mirrors the finalize page's `/ribbon/i` test.
+  if (isRibbonHandle(opts.productHandle)) {
+    return ribbonRatePerRoll(W) * q;
   }
 
   // ── Hangtags: universal manufacturing formula (mirrors the finalize page) ─

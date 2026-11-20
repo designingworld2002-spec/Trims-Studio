@@ -160,6 +160,39 @@ export interface ProductConfig {
    * name its fabric (e.g. `printed-ribbons`).
    */
   defaultMaterial?: Material;
+
+  /* ---------------- Discrete width / roll-form products -------------- */
+  /**
+   * Whitelist of selectable SHORT-edge (width) values in mm. When set,
+   * the Product panel renders a Width <select> with exactly these values
+   * instead of a free numeric input, and `constrainDimensions` snaps any
+   * incoming width (URL param, restored design) to the NEAREST allowed
+   * value. Used by printed ribbons (12/16/20/25/30/40/50 mm), whose
+   * widths map 1:1 onto a per-roll price.
+   */
+  allowedWidthsMm?: number[];
+  /**
+   * Hide the Length input entirely in the UI while keeping the length
+   * pinned internally via `fixedLengthMm` (ribbons: 150 mm repeat,
+   * never shown to or edited by the customer).
+   */
+  hideLengthInput?: boolean;
+  /**
+   * Roll length in metres, shown as a fixed spec note (ribbons: 180 mtr
+   * per roll). Display-only — never affects canvas geometry.
+   */
+  rollLengthMeters?: number;
+  /**
+   * Quantity unit wording for the live quote + finalize page. Defaults
+   * to unit / units for every product; ribbons use roll / rolls.
+   */
+  quantityUnit?: { singular: string; plural: string };
+  /**
+   * Minimum order quantity in the product's own unit — mirrors the
+   * finalize page MOQ. Ribbons: 2 rolls (labels 500, hangtags 1000 stay
+   * in the pricing helper, which this does not override).
+   */
+  minOrderQuantity?: number;
 }
 
 const ALL_TOOLS: NonNullable<ToolKey>[] = [
@@ -272,7 +305,7 @@ export const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
   // -------------------------------------------------------------------
   // Printed Ribbons — a printed satin ribbon strip cut from a fixed
   // 150 mm pitch. The LENGTH is a manufacturing constant (150 mm); only
-  // the tape HEIGHT varies, across the stocked 10–50 mm range. Both
+  // the tape WIDTH varies, across the 7 stocked values (12-50 mm). Both
   // constraints are enforced in the store (see `constrainDimensions`),
   // not just in the UI, so no code path can produce an unmakeable size.
   //
@@ -298,24 +331,22 @@ export const PRODUCT_CONFIGS: Record<string, ProductConfig> = {
     textureOverlayBlendMode: "multiply",
     // Hard constraints — see the ProductConfig docs above.
     fixedLengthMm: 150,
-    widthRangeMm: { min: 10, max: 50 },
+    // The width is a DISCRETE choice (priced per roll), so the panel
+    // renders a dropdown; the range is kept as a guard for the snap.
+    widthRangeMm: { min: 12, max: 50 },
+    allowedWidthsMm: [12, 16, 20, 25, 30, 40, 50],
+    hideLengthInput: true,
+    rollLengthMeters: 180,
+    quantityUnit: { singular: "roll", plural: "rolls" },
+    minOrderQuantity: 2,
     orientationLocked: true,
     aspectRatioLinkDisabled: true,
     fitStageToBleed: true,
-    // Height-only product: scale artwork uniformly so changing the tape
-    // height never distorts a design (see ProductConfig docs above).
+    // Width-only product: scale artwork uniformly so changing the tape
+    // width never distorts a design (see ProductConfig docs above).
     preserveAspectOnResize: true,
     // Printed satin tape — never price ribbons on the woven formula.
     defaultMaterial: "Satin",
-    // Stocked tape heights. `lengthMm` is pinned on every tier so a
-    // preset click can never alter the fixed 150 mm length.
-    presetSizes: [
-      { label: "Slim", widthMm: 10, lengthMm: 150 },
-      { label: "Narrow", widthMm: 15, lengthMm: 150 },
-      { label: "Standard", widthMm: 25, lengthMm: 150 },
-      { label: "Wide", widthMm: 38, lengthMm: 150 },
-      { label: "Extra wide", widthMm: 50, lengthMm: 150 },
-    ],
   },
 
   ...printedLabelConfigs(),
