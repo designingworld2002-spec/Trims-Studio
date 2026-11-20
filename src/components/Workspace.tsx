@@ -7,8 +7,10 @@ import { _registerHistory, history } from "@/lib/historyAccessor";
 import { Autosave, loadSavedDesign, syncWorkIdToUrl } from "@/lib/autosave";
 import { useSmartGuides } from "@/lib/useSmartGuides";
 import { analyzeImageElementSharpness } from "@/lib/imageQuality";
+import { isTouchLikeDevice } from "@/lib/deviceCaps";
 import { TopContextualToolbar } from "./TopContextualToolbar";
 import { ObjectActionMenu } from "./ObjectActionMenu";
+import { ObjectTransformHandles } from "./ObjectTransformHandles";
 import { RevertToTemplate } from "./RevertToTemplate";
 import { SideToggle } from "./SideToggle";
 import { WarningToast } from "./WarningToast";
@@ -1443,6 +1445,16 @@ export function Workspace() {
     visible: boolean;
   }>({ left: 0, top: 0, visible: false });
 
+  // VistaPrint-style Drag + Rotate handle cluster — centred (CSS px
+  // relative to the stage) directly below the active object's bounding
+  // box. Tracked alongside the action menu so it follows the object
+  // across zoom / move / rotate.
+  const [transformHandles, setTransformHandles] = useState<{
+    left: number;
+    top: number;
+    visible: boolean;
+  }>({ left: 0, top: 0, visible: false });
+
   // True while the user is actively dragging or scaling an object — used
   // to HIDE the centred low-quality warning badge during interaction so
   // it doesn't obstruct the image being positioned.
@@ -1475,6 +1487,16 @@ export function Workspace() {
       backgroundColor: "transparent",
       preserveObjectStacking: true,
       selection: true,
+      // ── iOS / mobile crash guard ──────────────────────────────────────
+      // Cap the Retina backing store on touch devices. Fabric scales BOTH
+      // the lower + upper canvases by devicePixelRatio; on a dpr-3 iPhone
+      // that's 6000×6000×4B = 144 MB each (≈288 MB), which crashes WebKit.
+      // Disabling it keeps each backing store at 2000×2000 (≈16 MB). The
+      // 2000×2000 LOGICAL coordinate system is unchanged, so every
+      // template, JSON coordinate, ruler and guide stays identical, and
+      // print export (saveDesign) is governed by its own `multiplier`, so
+      // export resolution is unaffected. Desktop keeps full Retina.
+      enableRetinaScaling: !isTouchLikeDevice(),
     });
 
     // Sync selection/modification events into Zustand.
@@ -1905,7 +1927,20 @@ export function Workspace() {
       hist.dispose();
       auto.flush();
       auto.dispose();
+      // Capture the backing-store elements BEFORE dispose(), then zero
+      // their dimensions AFTER — WebKit/iOS otherwise retains the canvas
+      // buffers until GC, keeping the (large) memory allocated across
+      // template reloads / remounts. Setting width/height to 0 forces an
+      // immediate buffer release.
+      const lowerEl = (canvas as any).lowerCanvasEl as HTMLCanvasElement | undefined;
+      const upperEl = (canvas as any).upperCanvasEl as HTMLCanvasElement | undefined;
       canvas.dispose();
+      [lowerEl, upperEl].forEach((el) => {
+        if (el) {
+          el.width = 0;
+          el.height = 0;
+        }
+      });
       setCanvas(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2093,9 +2128,16 @@ export function Workspace() {
   }, []);
 
   /* ----- Load template JSON if provided (then redraw guides on top) ----- */
+  const templateLoadedUrlRef = useRef<string | null>(null);
   useEffect(() => {
     const canvas = useCanvasStore.getState().canvas;
     if (!canvas || !templateJsonUrl) return;
+    // Concurrency guard: never load the SAME template URL twice (a React
+    // StrictMode double-mount, a remount, or a redundant effect re-run
+    // would otherwise fetch + loadFromJSON again, stacking fabric objects
+    // and leaking canvas memory). A genuinely new URL resets the guard.
+    if (templateLoadedUrlRef.current === templateJsonUrl) return;
+    templateLoadedUrlRef.current = templateJsonUrl;
     let cancelled = false;
     (async () => {
       try {
@@ -2188,6 +2230,10 @@ export function Workspace() {
         });
       } catch (e) {
         console.warn("[trims-studio] Template JSON load failed:", e);
+        // Allow a future identical-URL retry after a transient failure.
+        if (templateLoadedUrlRef.current === templateJsonUrl) {
+          templateLoadedUrlRef.current = null;
+        }
         // Keep an empty canvas with guides so the user can still edit.
         guidesRef.current = drawGuides(
           canvas,
@@ -2207,12 +2253,9 @@ export function Workspace() {
   const updateActionMenuPos = useCallback((canvas: fabric.Canvas) => {
     const active = canvas.getActiveObject();
     const stage = stageRef.current;
-    if (!active || !stage) {
+    if (!active || !stage || (active as any).excludeFromExport) {
       setActionMenuPos((p) => ({ ...p, visible: false }));
-      return;
-    }
-    if ((active as any).excludeFromExport) {
-      setActionMenuPos((p) => ({ ...p, visible: false }));
+      setTransformHandles((p) => (p.visible ? { ...p, visible: false } : p));
       return;
     }
     // Convert object's bounding rect (canvas coords) into CSS pixels by
@@ -2224,6 +2267,19 @@ export function Workspace() {
       left: br.left * scale,
       top: br.top * scale - 48, // 48px above bounding rect
       visible: true,
+    });
+
+    // Drag/Rotate cluster — centred below the bbox, ~16px clear of the
+    // bottom resize handles. Hidden while editing text (keyboard/caret)
+    // or when the object is fully locked (both movement axes), matching
+    // the store's lock semantics.
+    const a = active as any;
+    const isEditingText = a.isEditing === true;
+    const fullyLocked = !!(a.lockMovementX && a.lockMovementY);
+    setTransformHandles({
+      left: (br.left + br.width / 2) * scale,
+      top: (br.top + br.height) * scale + 16,
+      visible: !isEditingText && !fullyLocked,
     });
   }, []);
 
@@ -2501,6 +2557,16 @@ export function Workspace() {
         {/* Floating per-object actions. */}
         {!previewMode && actionMenuPos.visible && (
           <ObjectActionMenu left={actionMenuPos.left} top={actionMenuPos.top} />
+        )}
+
+        {/* VistaPrint-style Drag + Rotate cluster below the object. */}
+        {!previewMode && transformHandles.visible && (
+          <ObjectTransformHandles
+            left={transformHandles.left}
+            top={transformHandles.top}
+            stageRef={stageRef}
+            getScale={() => fitScaleRef.current * zoomRef.current}
+          />
         )}
 
         {/* Centred low-quality warning badge — rendered directly over the

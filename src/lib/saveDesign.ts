@@ -12,6 +12,30 @@ import type {
 } from "@/store/canvasStore";
 import { getProductConfig, type VisualGuides } from "@/config/productConfig";
 import { normaliseMaterial, type Material } from "@/lib/pricing";
+import { isTouchLikeDevice } from "@/lib/deviceCaps";
+
+/**
+ * Export a region of a Fabric canvas to a PNG data URL, resilient to iOS/
+ * mobile out-of-memory. If the full-resolution `multiplier` export throws
+ * (WebKit raises when the scratch canvas is too large), it retries at 1×
+ * so the save still completes with a usable — if lower-res — PNG rather
+ * than crashing the flow. Desktop practically never hits the fallback.
+ */
+function safeToDataURL(
+  canvas: fabric.StaticCanvas,
+  opts: { format: string; left: number; top: number; width: number; height: number; multiplier: number }
+): string {
+  try {
+    return canvas.toDataURL(opts as any);
+  } catch (e) {
+    console.warn(
+      "[saveDesign] toDataURL failed at multiplier " + opts.multiplier +
+        " — retrying at 1× (mobile OOM guard).",
+      e
+    );
+    return canvas.toDataURL({ ...opts, multiplier: 1 } as any);
+  }
+}
 
 /**
  * Final "Continue" save flow.
@@ -812,7 +836,7 @@ function snapshotLive(
   const cx = VIRTUAL_SIZE / 2;
   const cy = VIRTUAL_SIZE / 2;
 
-  const previewDataUrl = canvas.toDataURL({
+  const previewDataUrl = safeToDataURL(canvas as any, {
     format: "png",
     left: cx - trimW / 2,
     top: cy - trimH / 2,
@@ -918,6 +942,11 @@ function snapshotFromStoredSnapshot(
       off = new fabric.StaticCanvas(null as any, {
         width: VIRTUAL_SIZE,
         height: VIRTUAL_SIZE,
+        // Offscreen export scratch: output resolution is governed by the
+        // `multiplier` on toDataURL, so Retina scaling only inflates the
+        // transient backing store (6000² = 144 MB on a dpr-3 iPhone →
+        // OOM). Disable it on mobile; the exported PNG is pixel-identical.
+        enableRetinaScaling: !isTouchLikeDevice(),
       });
       const payload =
         typeof snap.fabric === "string"
@@ -967,7 +996,7 @@ function snapshotFromStoredSnapshot(
           const trimH = widthMm * MM_TO_PX;
           const cx = VIRTUAL_SIZE / 2;
           const cy = VIRTUAL_SIZE / 2;
-          const previewDataUrl = off!.toDataURL({
+          const previewDataUrl = safeToDataURL(off!, {
             format: "png",
             left: cx - trimW / 2,
             top: cy - trimH / 2,

@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { fabric } from "fabric";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useCanvasStore } from "./store/canvasStore";
@@ -7,8 +8,20 @@ import { readUrlConfig } from "./lib/urlParams";
 import { getProductConfig } from "./config/productConfig";
 import { installFabricTextareaFix } from "./lib/fabricTextareaFix";
 import { installFabricControlDefaults } from "./lib/fabricControlDefaults";
+import { isTouchLikeDevice } from "./lib/deviceCaps";
 import { normaliseMaterial } from "./lib/pricing";
 import "./index.css";
+
+// ── iOS / mobile memory guard: cap Fabric's object-cache allocations ──────
+// Fabric caches each object to an offscreen canvas bounded by
+// `maxCacheSideLimit` (default 4096) and `perfLimitSizeTotal` (default
+// 2,097,152 px). On touch devices a single large text/image object can
+// otherwise allocate a multi-MB offscreen cache; halving these keeps mobile
+// memory in check. Desktop keeps Fabric's defaults (full quality) untouched.
+if (isTouchLikeDevice()) {
+  (fabric as any).perfLimitSizeTotal = 1048576; // 1024×1024 px cap
+  (fabric as any).maxCacheSideLimit = 2048;
+}
 
 /** Products whose size + material must be chosen before designing. */
 const MATERIAL_SETUP_HANDLES = ["washcare-labels", "size-labels"];

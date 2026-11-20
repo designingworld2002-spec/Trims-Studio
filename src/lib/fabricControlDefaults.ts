@@ -28,4 +28,21 @@ export function installFabricControlDefaults() {
     padding: 5,
     cornerStyle: "circle",
   } as Partial<fabric.Object>);
+
+  // Hide Fabric's built-in top rotation handle (`mtr`) globally — the new
+  // VistaPrint-style Rotate button below the object replaces it, keeping
+  // the top area clear for the Lock / Duplicate / Delete menu. Set on the
+  // prototype so every object (and ActiveSelection) inherits it; the
+  // store toggles `hasControls` for lock, which still hides ALL handles
+  // when locked, so this only affects the unlocked state.
+  try {
+    (fabric.Object.prototype as any).setControlsVisibility({ mtr: false });
+    if ((fabric as any).ActiveSelection) {
+      (fabric as any).ActiveSelection.prototype.setControlsVisibility({
+        mtr: false,
+      });
+    }
+  } catch {
+    /* non-fatal — older Fabric without setControlsVisibility */
+  }
 }
