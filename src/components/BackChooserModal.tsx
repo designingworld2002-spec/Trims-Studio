@@ -89,7 +89,7 @@ export function BackChooserModal() {
       role="dialog"
       aria-modal="true"
       aria-labelledby="back-chooser-title"
-      className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm max-md:backdrop-blur-none flex items-center justify-center p-4"
       onClick={() => setOpen(false)}
     >
       <div

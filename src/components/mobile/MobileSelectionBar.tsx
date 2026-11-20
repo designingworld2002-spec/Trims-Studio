@@ -86,7 +86,7 @@ export function MobileSelectionBar() {
     <div
       role="toolbar"
       aria-label="Object actions"
-      className="md:hidden fixed bottom-[calc(74px_+_env(safe-area-inset-bottom))] left-0 w-full z-40 flex items-stretch bg-white/90 backdrop-blur border-t border-gray-200/70 shadow-md"
+      className="md:hidden fixed bottom-[calc(74px_+_env(safe-area-inset-bottom))] left-0 w-full z-40 flex items-stretch bg-white border-t border-gray-200/70 shadow-md"
     >
       {/* Primary FAB — opens the add-element (Shapes) sheet. */}
       <div className="shrink-0 flex items-center pl-3 pr-2 py-2">

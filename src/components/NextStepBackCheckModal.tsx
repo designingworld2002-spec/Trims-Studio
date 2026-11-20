@@ -48,7 +48,7 @@ export function NextStepBackCheckModal() {
       role="dialog"
       aria-modal="true"
       aria-labelledby="next-back-check-title"
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm max-md:backdrop-blur-none px-4"
       onClick={() => setOpen(false)}
     >
       <div

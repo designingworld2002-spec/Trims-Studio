@@ -42,7 +42,7 @@ export function ConfirmDeleteModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-delete-title"
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/45 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/45 backdrop-blur-sm max-md:backdrop-blur-none px-4"
       onClick={onCancel}
     >
       <div

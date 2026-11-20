@@ -253,7 +253,7 @@ export function FlipPreviewModal() {
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-50 bg-slate-900/85 backdrop-blur-sm flex flex-col overflow-hidden"
+      className="fixed inset-0 z-50 bg-slate-900/85 backdrop-blur-sm max-md:backdrop-blur-none flex flex-col overflow-hidden"
       style={{
         // Reserve a strict bottom buffer (40 px on top of any iOS/Android
         // safe-area inset) so the Front/Back footer always clears the

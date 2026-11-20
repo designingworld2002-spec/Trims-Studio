@@ -65,7 +65,7 @@ export function SideToggle() {
       aria-label="Switch side"
     >
       {/* Segmented pill */}
-      <div className="flex items-center bg-white/95 backdrop-blur-sm border border-vp-border rounded-full p-1 shadow-vp-pop">
+      <div className="flex items-center bg-white/95 backdrop-blur-sm max-md:backdrop-blur-none max-md:bg-white border border-vp-border rounded-full p-1 shadow-vp-pop">
         {sides.map((s) => {
           const active = activeSide === s.key;
           return (
@@ -97,7 +97,7 @@ export function SideToggle() {
           aria-label="Remove back design"
           className={[
             "flex items-center justify-center h-9 w-9 rounded-full",
-            "bg-white/95 backdrop-blur-sm border border-vp-border shadow-vp-pop",
+            "bg-white/95 backdrop-blur-sm max-md:backdrop-blur-none max-md:bg-white border border-vp-border shadow-vp-pop",
             "text-vp-ink/60 hover:text-red-600 hover:border-red-200 hover:bg-red-50",
             "transition-colors",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300",

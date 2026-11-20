@@ -38,7 +38,7 @@ export function ConfirmDeleteBackModal() {
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-delete-back-title"
-      className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm max-md:backdrop-blur-none px-4"
       onClick={() => setOpen(false)}
     >
       <div

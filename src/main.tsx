@@ -9,8 +9,13 @@ import { getProductConfig } from "./config/productConfig";
 import { installFabricTextareaFix } from "./lib/fabricTextareaFix";
 import { installFabricControlDefaults } from "./lib/fabricControlDefaults";
 import { isTouchLikeDevice } from "./lib/deviceCaps";
+import { installMemDebug } from "./lib/memDebug";
 import { normaliseMaterial } from "./lib/pricing";
 import "./index.css";
+
+// `?debug=mem` → log canvas + GPU-layer memory to the console (inert
+// otherwise). Lets us confirm on a real iPhone that the mobile caps fired.
+installMemDebug();
 
 // ── iOS / mobile memory guard: cap Fabric's object-cache allocations ──────
 // Fabric caches each object to an offscreen canvas bounded by

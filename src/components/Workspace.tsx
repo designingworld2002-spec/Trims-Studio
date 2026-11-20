@@ -2462,6 +2462,17 @@ export function Workspace() {
   const totalScale = fitScale * zoom;
   const stagePxSize = VIRTUAL_SIZE * totalScale;
 
+  // ── iOS / mobile GPU-memory guard ─────────────────────────────────────
+  // On touch devices, strip the compositing triggers that force WebKit to
+  // rasterise the 2000×2000 stage wrapper at FULL resolution: `perspective`
+  // + `preserve-3d` (3D contexts can't be pre-scaled) and the
+  // `drop-shadow()` filter (allocates a full-size offscreen buffer). At
+  // dpr 3 each of those layers is ~137 MiB — ~274 MiB total, on EVERY
+  // product, which is what still crashed iOS after the canvas DPR cap.
+  // Without them the 2D `transform: scale()` composites at the small
+  // on-screen size instead. Desktop keeps the full 3D flip + soft shadow.
+  const lowGpu = isTouchLikeDevice();
+
   // "Stable" workspace flag — falls to false on any zoom or
   // dimension/orientation change, then re-stabilises after a short
   // debounce. The rotate FAB hides while transitioning so it doesn't
@@ -2512,6 +2523,13 @@ export function Workspace() {
         style={{
           width: stagePxSize,
           height: stagePxSize,
+          // Mobile: the shape-hugging drop-shadow filter is removed from the
+          // 2000px wrapper (see below); put a cheap rectangular box-shadow
+          // on THIS already-fitted (~340px) box instead so the "paper"
+          // elevation survives without a full-size GPU buffer.
+          boxShadow: lowGpu
+            ? "0 10px 24px rgba(15,23,42,0.14), 0 3px 8px rgba(15,23,42,0.08)"
+            : undefined,
         }}
       >
         {/* Canvas — virtual resolution, scaled from CENTER. Outer layer
@@ -2530,17 +2548,22 @@ export function Workspace() {
             left: "50%",
             transform: `translate(-50%, -50%) scale(${totalScale})`,
             transformOrigin: "center center",
-            perspective: "2400px",
+            // Desktop only — `perspective` promotes a full-res 2000px GPU
+            // layer on iOS. The flip reads as a 2D squish on mobile.
+            perspective: lowGpu ? undefined : "2400px",
           }}
         >
           <div
             ref={flipWrapperRef}
-            className="vp-canvas-shadow"
+            className={lowGpu ? "" : "vp-canvas-shadow"}
             style={{
               width: "100%",
               height: "100%",
               position: "relative",
-              transformStyle: "preserve-3d",
+              // Desktop only — `preserve-3d` forces full-res rasterisation
+              // of this 2000px layer on iOS; `flat` lets the 2D scale
+              // composite at the small on-screen size instead.
+              transformStyle: lowGpu ? "flat" : "preserve-3d",
               transition: "transform 250ms ease-in-out",
               transform: "rotateY(0deg)",
             }}
